@@ -1,0 +1,43 @@
+# Anya Reads: research summary
+
+Researched 2026-10-09 for a kindergarten reading game. Short and practical. Every design choice in `index.html` traces back to a finding here.
+
+## 1. Mentava (the model Brandon pointed to)
+- **Method:** direct-instruction, systematic phonics "inspired by Orton-Gillingham and Engelmann." Reading is framed as two steps. (1) Learn letter sounds. (2) **Blend sounds into words.** Mentava calls blending "the hardest part" and teaches it in the first five levels. (https://www.mentava.com/curriculum, https://www.mentava.com/our-approach)
+- **Sequence:** single letters first, then letter pairs, then irregular words. Levels 1–20: a, m, s, t, review, f, d, g, i, n, p, h, b, l, j, c, v, w, r, k. Then ck/sh/ch/th, blends, the other vowels, silent-e, vowel teams and r-controlled vowels. Irregular "sight" words (the, they, I, want, to, do, said, you, ...) are slotted in **when a target book needs them**. Mentava starts with continuous sounds (m, s, f) and early vowel **a**, so blends can be stretched ("mmmaaat"). (https://www.mentava.com/curriculum)
+- **Scale and pace:** about 2,300–2,500 small activities across 120 levels. Levels 1–20 roughly cover kindergarten Common Core. A level takes 1–3 days at about 15–30 minutes a day. Children reach about early 2nd-grade reading in 6–12 months. (https://www.mentava.com/blog/how-fast-does-mentava-teach-reading/)
+- **Session philosophy:** "Short, focused daily sessions built around active practice, not passive entertainment." "Sessions end when your child has done enough focused practice." The software "moves forward as they master each skill." Mentava sells itself on "fewer battles," with a parent sitting alongside, not on game rewards. (https://www.mentava.com/, https://www.mentava.com/mentava-trial)
+
+## 2. Science of reading: what to teach
+- **National Reading Panel (2000) meta-analysis:** systematic phonics gives significant benefits in K–1. "The ability to read and spell words was enhanced in kindergartners who received systematic beginning phonics instruction," and the idea that K is too early "was not supported by the data." (https://www.nichd.nih.gov/publications/pubs/nrp/findings)
+- **Phonemic awareness:** blending and segmenting are the highest-value PA skills. PA works best taught **together with letters**, not in isolation. Focusing on one or two skills beat a scattershot approach. (NRP; Shanahan summary: https://www.uwosh.edu/soehs/wp-content/uploads/sites/114/2018/12/Shanahan-national-reading-panel-report-Advice-for-Teachers.pdf; NCTE guide: https://ncte.org/wp-content/uploads/2022/01/NRP_Report.pdf)
+- **Blending technique:** start with **continuous sounds** (m, s, f, n, l, r, and vowels) using connected phonation ("ssuunn," not "s-u-n"). Put stop sounds at the **end** of words first (mat, sat) before the start (cat, top). Avoid adding "uh" to stop sounds. (https://www.readingrockets.org/classroom/classroom-strategies/blending-and-segmenting-games, https://www.collaborativeclassroom.org/blog/the-power-of-continuous-blending-using-connected-phonation-to-support-decoding/)
+- **Scope and sequence, UFLI Foundations (K):** a, m, s, t, (VC/CVC), p, f, i, n, nasal a (am/an), o, d, c, u, g, b, e, -s, k, h, r, l, w, j, y, x, qu, v, z. This is a quick-start order like Mentava's: high-utility, visually and aurally distinct letters first, with words possible after the first 4 letters. (https://ufli.education.ufl.edu/foundations/toolbox/1-34/, https://edreports.org/reports/detail/ufli-ela-k-2-2025/kindergarten/gateway-one)
+- **Heart words (orthographic mapping, Ehri):** high-frequency words are stored by mapping sounds to letters, not by whole-word memorizing. Teach the regular parts with phonics and mark only the truly irregular part with a heart. Words that are just "not decodable yet" should wait for phonics. (https://library.ecu.edu/wp-content/pv-uploads/sites/257/2019/07/ehri.pdf, https://www.goodteaching.ca/uploads/6/0/4/9/60496921/science_of_reading_words.pdf)
+- **Spelling and encoding strengthens reading:** NRP found phonics improved both reading and spelling. Encoding (building words from sounds) is part of every OG/UFLI lesson.
+- **Decodable text:** apply new letter-sounds in connected text made only of taught patterns plus taught heart words (UFLI decodable passages; NRP).
+
+## 3. How to practice: repetition, spacing, mastery
+- **Spaced retrieval works for 4–5-year-olds.** Preschoolers learned and kept new words better when retrieval was **spaced by other items** than with immediate retrieval or plain re-study. The benefit held after 1 week. Expanding and equal spacing performed about the same at 1 week. (https://pmc.ncbi.nlm.nih.gov/articles/PMC6802884/, https://link.springer.com/article/10.1186/s11689-021-09368-z, https://pubs.asha.org/doi/10.1044/2024_JSLHR-23-00528)
+- **Mastery learning (Engelmann/DI, OG):** don't move on until the current skill is firm, but keep cycling older material ("cumulative review"). Mentava moves forward "as they master each skill."
+- **Session length:** a large RCT of digital personalized learning in early grades found **5–7 minute sessions** worked best for the youngest learners, and 9 minutes was least effective for literacy (https://docs.edtechhub.org/lib/93H6B9P3/download/DUZMGNJ6). Mentava suggests 15–30 minutes, but with a parent beside the child. **Conclusion:** short, fixed sessions of about 15 practice items (about 7–10 minutes), end on a calm note, and do 1–2 a day rather than one long block.
+
+## 4. Rewards and engagement for young kids
+- **Overjustification effect (Lepper, Greene & Nisbett, 1973, ages 3–5):** children who were *promised* a reward for drawing later chose to draw less, and drew worse, than children who got an unexpected reward or none. Expected, contingent rewards undermine intrinsic interest. (https://bingschool.stanford.edu/sites/bingschool/files/1973_lepperetal.pdf, https://doi.org/10.1037/h0035519)
+- **"Putting education in educational apps" (Hirsh-Pasek et al., 2015):** good apps support **active, minds-on** learning, **engagement with the learning goal** rather than distracting bells and whistles, **meaningful** connection, and **social interaction** (a parent alongside). (https://pure.psu.edu/en/publications/putting-education-in-educational-apps-lessons-from-the-science-of/)
+- **Takeaways:** feedback should be *informational* ("Yes, m-a-t, mat"), not points or slot-machine surprises. No streak pressure, coins or loot. A small, predictable sign of progress (the unicorn moves one step along a rainbow after each session) is fine. Don't use rewards as bait.
+
+## 5. Design decisions this produced
+| Finding | Design |
+|---|---|
+| Systematic phonics, continuous sounds and early vowel a | 25 levels: a m s t · i p n f · o d c g · u b e h · r l k j · w y v x z qu. Words unlock automatically only once all their letters are taught. |
+| Blending is the hardest step | Every new word is first **modeled**: letters light up one by one with their sound, then a sweep blends them. Reading items let her tap any letter to hear its sound (scaffold) before answering. |
+| Spaced retrieval beats massed or immediate practice | A Leitner-style schedule (due in about 0, 1, 2, 4, 7 or 14 days). Each session is about 40% current level and 60% review. Missed items come back about 3 items later in the same session. New items appear at least twice, spaced apart. |
+| Mastery before moving on | An item is "mastered" at ≥80% of the last 5 tries, with at least 3 tries across ≥2 sessions. A level unlocks when its letters, its heart words and some of its words are mastered. The parent can override. |
+| Encoding helps decoding | A "build the word" activity spells from letter tiles. |
+| Heart words via mapping | Heart words come in gradually (the, a, I, is, to, ...). The irregular part is marked with a heart. |
+| Decodable text | Sentences unlock only when every word is decodable or a taught heart word. The child checks meaning by picking the matching picture pair. |
+| 5–10 min sessions | 15 items by default (10/15/20 adjustable), plus a soft 10-minute cap, then a calm finish screen. |
+| Overjustification and educational-app pillars | No points, coins, streaks, timers, confetti or random prizes. Feedback says the sound or word. One gentle sparkle on a correct answer. The unicorn takes one step on a rainbow per finished session. |
+| Kids can't read instructions | Every prompt is spoken and replayable with a big speaker button. Parent-only text sits behind a math gate. |
+| Single-story a/g matter for beginners | Text uses Andika (SIL's typeface for beginning readers), embedded so it works offline. |

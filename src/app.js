@@ -1,0 +1,590 @@
+'use strict';
+// ===================== UTIL =====================
+const $ = s => document.querySelector(s);
+const QS = new URLSearchParams(location.search);
+const MUTE = QS.has('mute');          // testing: skip speech
+const sleep = ms => new Promise(r => setTimeout(r, MUTE ? Math.min(ms, 20) : ms));
+const DAY = 864e5;
+const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const MAXLEVEL = LETTERS.length;
+function graphemes(word){ const w = word.toLowerCase(), out = []; for (let i = 0; i < w.length; i++){ if (w[i]==='q' && w[i+1]==='u'){ out.push('qu'); i++; } else out.push(w[i]); } return out; }
+function wordLevel(w){ let m = 0; for (const g of graphemes(w)){ const L = LMAP[g]; if (!L) return 999; m = Math.max(m, L.level); } return m; }
+const WORDS = WORDLIST.map(o => ({...o, level: wordLevel(o.w)})).filter(o => o.level <= MAXLEVEL);
+const WMAP = Object.fromEntries(WORDS.map(o => [o.w, o]));
+function tokenLevel(t){ const k = t.toLowerCase(); return HMAP[k] ? HMAP[k].level : wordLevel(k); }
+const SENTS = SENTENCES.map(([s,a,b], i) => { const toks = s.replace(/[.!?,]/g,'').split(' '); return {id:'S:'+i, s, toks, a, b, hearts: toks.map(t => t.toLowerCase()).filter(t => HMAP[t]), level: Math.max(...toks.map(tokenLevel))}; }).filter(o => o.level <= MAXLEVEL);
+const SMAP = Object.fromEntries(SENTS.map(o => [o.id, o]));
+
+// ===================== STATE =====================
+const KEY = 'anyaReads.v1';
+function defaults(){ return { version:1, name:'Anya', level:1, created:Date.now(),
+  settings:{ items:15, maxMin:10, voice:'', rate:0.85, soundMode:'tts' },
+  items:{}, intro:{}, sessions:[], log:[], rainbow:0 }; }
+let state;
+function load(){ try { state = JSON.parse(localStorage.getItem(KEY)) || defaults(); } catch(e){ state = defaults(); }
+  const d = defaults(); for (const k in d) if (state[k] === undefined) state[k] = d[k];
+  state.settings = {...d.settings, ...state.settings}; }
+function save(){ try { localStorage.setItem(KEY, JSON.stringify(state)); } catch(e){ console.warn('save failed', e); } }
+
+// Item helpers -------------------------------------------------------
+// ids: L:m (letter sound), W:mat (decodable word), H:the (heart word), S:3 (sentence)
+function itemLevel(id){ const [k, v] = [id[0], id.slice(2)];
+  if (k==='L') return LMAP[v].level; if (k==='W') return WMAP[v].level; if (k==='H') return HMAP[v].level; if (k==='S') return SMAP[id].level; return 99; }
+function itemLabel(id){ const [k, v] = [id[0], id.slice(2)]; if (k==='S') return '“'+SMAP[id].s+'”'; if (k==='H') return '♥ '+HMAP[v].w; return v; }
+function rec(id){ return state.items[id] || (state.items[id] = {a:0, c:0, h:[], first:0, last:0, box:0, due:0, ns:0, ls:'', bs:'', help:0}); }
+function recentAcc(it, n=5){ const h = it.h.slice(-n); return h.length ? h.reduce((x,y)=>x+y,0) / h.length : 0; }
+function mastered(id){ const it = state.items[id]; return !!it && it.a >= 3 && it.ns >= 2 && recentAcc(it) >= 0.8; }
+const INTERVALS = [0, 1, 2, 4, 7, 14];
+function recordAttempt(id, correct, act, help){
+  const it = rec(id), now = Date.now(), sid = SESSION ? SESSION.id : '';
+  it.a++; if (correct) it.c++; it.h.push(correct ? 1 : 0); if (it.h.length > 10) it.h.shift();
+  if (!it.first) it.first = now; it.last = now; it.help += help || 0;
+  if (it.ls !== sid){ it.ns++; it.ls = sid; }
+  if (correct){ if (it.bs !== sid){ it.box = Math.min(it.box + 1, 5); it.bs = sid; } }
+  else it.box = Math.max(0, it.box - 2);
+  it.due = now + INTERVALS[it.box] * DAY - 36e5; // an hour early so "tomorrow" means next day's session
+  state.log.push([now, id, act, correct ? 1 : 0, help || 0]); if (state.log.length > 4000) state.log.splice(0, state.log.length - 4000);
+  if (SESSION){ SESSION.n++; if (correct) SESSION.c++; const s = curSessRec(); if (s){ s.n = SESSION.n; s.c = SESSION.c; s.end = now; s.dur = Math.round((now - s.start)/1000); s.items[id] = (s.items[id]||0) + 1; } }
+  save();
+}
+function curSessRec(){ return SESSION && state.sessions.find(s => s.id === SESSION.id); }
+
+// What exists at a level --------------------------------------------
+function knownLetters(L){ return LETTERS.filter((l,i) => i + 1 <= L).map(l => l.id); }
+function available(L){
+  const out = [];
+  for (const l of knownLetters(L)) out.push('L:'+l);
+  for (const w of WORDS) if (w.level <= L) out.push('W:'+w.w);
+  for (const h of HEARTS) if (h[1] <= L) out.push('H:'+h[0].toLowerCase());
+  for (const s of SENTS) if (s.level <= L) out.push(s.id);
+  return out;
+}
+function levelCheck(L){ // is level L done -> can advance?
+  const lets = ['L:' + LETTERS[L-1].id];
+  const hearts = HEARTS.filter(h => h[1] === L).map(h => 'H:' + h[0].toLowerCase());
+  const words = WORDS.filter(w => w.level === L).map(w => 'W:' + w.w);
+  const needW = Math.min(2, words.length);
+  const okW = words.filter(mastered).length;
+  return { ok: lets.every(mastered) && hearts.every(mastered) && okW >= needW, lets, hearts, words, okW, needW };
+}
+
+// ===================== SPEECH =====================
+const Speech = {
+  voice:null, voices:[], token:0, audio:null, recs:{},
+  init(){ if (!('speechSynthesis' in window)) return; const load = () => { this.voices = speechSynthesis.getVoices().filter(v => /^en/i.test(v.lang)); this.choose(); };
+    load(); speechSynthesis.onvoiceschanged = load; },
+  choose(){ const want = state.settings.voice; let v = this.voices.find(v => v.voiceURI === want);
+    if (!v){ const pref = ['Samantha','Ava','Allison','Susan','Zoe','Nicky','Google US English','Aria','Jenny','Ana','Karen','Moira','Serena','Tessa'];
+      for (const p of pref){ v = this.voices.find(x => x.name.includes(p) && /en[-_]US/i.test(x.lang)) || this.voices.find(x => x.name.includes(p)); if (v) break; } }
+    this.voice = v || this.voices.find(x => /en[-_]US/i.test(x.lang)) || this.voices[0] || null; },
+  unlock(){ try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch(e){} },
+  cancel(){ this.token++; try { speechSynthesis.cancel(); } catch(e){} if (this.audio){ this.audio.pause(); this.audio = null; } setTalking(false); },
+  text(t, rate){ return new Promise(res => {
+      if (MUTE || !('speechSynthesis' in window)) return setTimeout(res, 10);
+      const u = new SpeechSynthesisUtterance(t); if (this.voice) u.voice = this.voice; u.lang = this.voice ? this.voice.lang : 'en-US';
+      u.rate = rate || state.settings.rate; u.pitch = 1.05; let done = false; const fin = () => { if (!done){ done = true; clearTimeout(to); res(); } };
+      this._u = u; // keep a reference: iOS can garbage-collect utterances and never fire onend
+      u.onend = fin; u.onerror = fin; const to = setTimeout(fin, 1800 + t.length * 110 / (u.rate || 1));
+      speechSynthesis.speak(u); }); },
+  play(url){ return new Promise(res => { if (MUTE) return setTimeout(res, 10); const a = new Audio(url); this.audio = a; let done = false; const fin = () => { if (!done){ done = true; res(); } };
+      a.onended = fin; a.onerror = fin; setTimeout(fin, 4000); a.play().catch(fin); }); },
+  async say(parts){ const my = ++this.token; setTalking(true);
+    try { if (!MUTE && (speechSynthesis.speaking || speechSynthesis.pending)){ speechSynthesis.cancel(); await new Promise(r => setTimeout(r, 60)); } } catch(e){} // Safari drops speak() right after cancel()
+    if (this.audio){ this.audio.pause(); this.audio = null; }
+    for (const p of [].concat(parts)){ if (my !== this.token) return;
+      if (typeof p === 'string') await this.text(p);
+      else if (p.pause) await sleep(p.pause);
+      else if (p.rec) await this.play(this.recs[p.rec]);
+      else if (p.t) await this.text(p.t, p.rate); }
+    if (my === this.token) setTalking(false); }
+};
+function setTalking(on){ document.querySelectorAll('.speaker').forEach(b => b.classList.toggle('talking', on)); }
+// The pure sound of a letter: parent recording > TTS approximation. withKey adds "as in apple".
+function sound(id, withKey = true){
+  const L = LMAP[id], keyPhrase = L.endKey ? 'like the end of ' + L.key : 'as in ' + L.key;
+  if (Speech.recs[id]) return withKey ? [{rec:id}, {pause:200}, keyPhrase] : [{rec:id}];
+  if (state.settings.soundMode === 'word' || L.noTTS) return [L.endKey ? 'the sound at the end of ' + L.key : 'the first sound in ' + L.key];
+  return withKey ? [{t:L.tts, rate:0.7}, {pause:250}, keyPhrase] : [{t:L.tts, rate:0.7}];
+}
+function pureSound(id){ return Speech.recs[id] ? {rec:id} : {t: LMAP[id].noTTS ? 'ks' : LMAP[id].tts, rate:0.7}; }
+
+// Parent recordings of letter sounds (IndexedDB) ------------------------
+const AudioDB = {
+  db:null,
+  open(){ return new Promise(res => { if (!window.indexedDB) return res(null); const r = indexedDB.open('anyaReadsAudio', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('sounds'); r.onsuccess = () => { this.db = r.result; res(this.db); }; r.onerror = () => res(null); }); },
+  async loadAll(){ if (!this.db) return; await new Promise(res => { const tx = this.db.transaction('sounds'); const st = tx.objectStore('sounds');
+    const rq = st.openCursor(); rq.onsuccess = () => { const c = rq.result; if (c){ Speech.recs[c.key] = URL.createObjectURL(c.value); c.continue(); } else res(); }; rq.onerror = res; }); },
+  put(k, blob){ return new Promise(res => { const tx = this.db.transaction('sounds','readwrite'); tx.objectStore('sounds').put(blob, k); tx.oncomplete = res; tx.onerror = res; }); },
+  del(k){ return new Promise(res => { const tx = this.db.transaction('sounds','readwrite'); tx.objectStore('sounds').delete(k); tx.oncomplete = res; tx.onerror = res; }); },
+};
+
+// ===================== UNICORN ART =====================
+function unicornSVG(cls = ''){ return `<svg class="uni ${cls}" viewBox="0 0 220 200" aria-hidden="true">
+ <defs><linearGradient id="hornG" x1="0" x2="1"><stop offset="0" stop-color="#f7d98b"/><stop offset="1" stop-color="#e9b85a"/></linearGradient></defs>
+ <g class="body">
+  <path d="M40 112 C10 100 8 140 28 150 C18 128 36 124 40 122Z" fill="#f8c8dc"/><path d="M42 118 C22 120 20 160 44 162 C32 146 44 136 46 128Z" fill="#cdb8ec"/><path d="M44 126 C34 140 40 170 58 168 C48 156 52 142 52 134Z" fill="#c4e1f7"/>
+  <rect x="62" y="140" width="16" height="44" rx="8" fill="#fff" stroke="#ddd0ee" stroke-width="3"/><rect x="84" y="144" width="16" height="42" rx="8" fill="#fff" stroke="#ddd0ee" stroke-width="3"/>
+  <rect x="122" y="144" width="16" height="42" rx="8" fill="#fff" stroke="#ddd0ee" stroke-width="3"/><rect x="142" y="140" width="16" height="44" rx="8" fill="#fff" stroke="#ddd0ee" stroke-width="3"/>
+  <rect x="62" y="176" width="16" height="9" rx="4" fill="#cdb8ec"/><rect x="84" y="178" width="16" height="9" rx="4" fill="#cdb8ec"/><rect x="122" y="178" width="16" height="9" rx="4" fill="#cdb8ec"/><rect x="142" y="176" width="16" height="9" rx="4" fill="#cdb8ec"/>
+  <ellipse cx="108" cy="128" rx="64" ry="38" fill="#fff" stroke="#ddd0ee" stroke-width="3"/>
+ </g>
+ <g class="head">
+  <path d="M132 112 C130 86 140 70 152 62 L176 86 C164 96 160 108 158 126Z" fill="#fff" stroke="#ddd0ee" stroke-width="3"/>
+  <ellipse cx="170" cy="62" rx="32" ry="27" fill="#fff" stroke="#ddd0ee" stroke-width="3"/>
+  <ellipse cx="192" cy="76" rx="18" ry="14" fill="#fdeef5" stroke="#ddd0ee" stroke-width="3"/>
+  <circle cx="196" cy="74" r="2.2" fill="#d79ab8"/>
+  <path d="M154 42 L148 22 L166 36Z" fill="#fff" stroke="#ddd0ee" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M172 38 L184 4 L190 42Z" fill="url(#hornG)" stroke="#e0b062" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M175 30 L188 27 M178 20 L186 18" stroke="#fff" stroke-width="2" stroke-linecap="round" opacity=".8"/>
+  <path d="M168 60 Q174 54 180 60" stroke="#3b3352" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+  <path d="M182 60 L186 56 M178 57 L180 52" stroke="#3b3352" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="176" cy="72" r="6" fill="#f8c8dc" opacity=".8"/>
+  <path d="M186 86 Q192 90 198 86" stroke="#c98aa8" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <circle cx="150" cy="44" r="11" fill="#f8c8dc"/><circle cx="140" cy="58" r="11" fill="#cdb8ec"/><circle cx="136" cy="74" r="11" fill="#c4e1f7"/>
+  <circle cx="134" cy="90" r="10" fill="#f8c8dc"/><circle cx="134" cy="104" r="9" fill="#cdb8ec"/><circle cx="160" cy="36" r="9" fill="#fbe9ad"/>
+ </g></svg>`; }
+function setUni(cls){ document.querySelectorAll('#play .uni').forEach(u => { u.classList.remove('nod','tilt'); if (cls){ void u.offsetWidth; u.classList.add(cls); setTimeout(() => u.classList.remove(cls), 1400); } }); }
+const SPEAKER = `<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z" fill="#3b3352"/><path d="M16 8.5c1.2 1 1.8 2.2 1.8 3.5s-.6 2.5-1.8 3.5M18.5 6c2 1.6 3 3.6 3 6s-1 4.4-3 6" stroke="#3b3352" stroke-width="2" fill="none" stroke-linecap="round"/></svg>`;
+const ARROW = `<svg viewBox="0 0 24 24"><path d="M5 12h12M12 6l6 6-6 6" stroke="#fff" stroke-width="3.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const PLAYICON = `<svg viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z" fill="#3b3352" stroke="#3b3352" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+
+function rainbowSVG(steps, per = 20, animateFrom = null){
+  const cx = 300, cy = 250, R = 210; const bands = ['#f8c8dc','#fdd5c0','#fbe9ad','#c4ecd9','#c4e1f7','#cdb8ec'];
+  let s = `<svg viewBox="0 0 600 270" style="width:100%">`;
+  bands.forEach((c,i) => { const r = R - i*14; s += `<path d="M${cx-r} ${cy} A${r} ${r} 0 0 1 ${cx+r} ${cy}" stroke="${c}" stroke-width="14" fill="none"/>`; });
+  const pos = k => { const t = Math.PI - (k/(per-1))*Math.PI; const r = R + 26; return [cx + r*Math.cos(t), cy - r*Math.sin(t)]; };
+  const cur = steps % per;
+  for (let k = 0; k < per; k++){ const [x,y] = pos(k); s += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${k < cur ? 7 : 5}" fill="${k < cur ? '#b9a2e0' : '#e8e1f2'}"/>`; }
+  const [ux,uy] = pos(cur); const from = animateFrom != null ? pos(animateFrom % per) : null;
+  s += `<text id="rbUni" x="${(from||[ux,uy])[0]}" y="${(from||[ux,uy])[1]+12}" font-size="40" text-anchor="middle" data-tx="${ux}" data-ty="${uy+12}">🦄</text>`;
+  const done = Math.floor(steps / per); if (done) s += `<text x="300" y="262" font-size="20" text-anchor="middle" fill="#7a7290">rainbows walked: ${done}</text>`;
+  return s + '</svg>';
+}
+
+// ===================== SCREENS =====================
+function show(id){ document.querySelectorAll('.screen').forEach(s => s.classList.toggle('on', s.id === id)); }
+function renderHome(){
+  $('#home').innerHTML = `<div class="stars"></div>
+   <button class="speaker speaker-home" aria-label="Hear instructions">${SPEAKER}</button>
+   <button class="grownup" id="gu">Grown-ups</button>
+   <h1>${esc(state.name)} Reads</h1>
+   <div class="uni-wrap">${unicornSVG()}</div>
+   <button class="big-start" id="startBtn" aria-label="Start">${PLAYICON}</button>
+   <div class="rainbow-box">${rainbowSVG(state.rainbow)}</div>`;
+  $('#startBtn').onclick = () => { Speech.unlock(); startSession(); };
+  $('#home .speaker').onclick = () => { Speech.unlock(); Speech.say([`Hi ${state.name}! Tap the big green button to start reading with the unicorn.`]); };
+  $('#gu').onclick = openGate;
+  show('home');
+}
+
+// ---------------- session planning ----------------
+let SESSION = null;
+function chooseAct(id, rep){
+  const k = id[0], v = id.slice(2), it = state.items[id];
+  if (k === 'L'){ const hasPics = LMAP[v].pics.length > 0; return (hasPics && rep > 0 && it && it.a >= 2 && Math.random() < 0.4) ? 'letterPic' : 'hearTap'; }
+  if (k === 'H') return 'heartPick';
+  if (k === 'S') return 'sentence';
+  if (k === 'W'){ const w = WMAP[v], nAvail = WORDS.filter(x => x.level <= state.level).length; const opts = [];
+    if (w.e){ opts.push('readPic','readPic'); }
+    if (nAvail >= 3) opts.push('hearPick');
+    if (!(rep === 0 && !(it && it.a))) opts.push('build'); else if (!opts.length) opts.push('build');
+    return pick(opts); }
+}
+function priority(id){
+  const it = state.items[id], now = Date.now(), L = state.level; let p = Math.random() * 1.5;
+  if (itemLevel(id) === L) p += 3; else if (itemLevel(id) >= L - 2) p += 1;
+  if (!it || !it.a) p += 1.5;
+  else { p += (1 - recentAcc(it)) * 4; if (it.due <= now) p += 2 + Math.min(3, (now - it.due) / DAY); if (mastered(id)) p -= 1.5; }
+  if (id[0] === 'S') p += 0.5; return p;
+}
+function buildPlan(){
+  const L = state.level, N = state.settings.items, avail = available(L);
+  const entries = []; const count = {}; const add = (id, needIntro) => { entries.push({id, rep: count[id] || 0, needIntro}); count[id] = (count[id] || 0) + 1; };
+  // 1. new letters + heart words for this level (taught, then retrieved 3x / 2x spaced)
+  const newL = knownLetters(L).filter(l => !state.intro['L:'+l]).map(l => 'L:'+l);
+  const newH = HEARTS.filter(h => h[1] <= L && !state.intro['H:'+h[0].toLowerCase()]).map(h => 'H:'+h[0].toLowerCase()).slice(0, 2);
+  const newW = shuffle(WORDS.filter(w => (newL.length ? w.level < L : w.level <= L) && !state.intro['W:'+w.w])).sort((a,b) => b.level - a.level).slice(0, newL.length ? 1 : 3).map(w => 'W:'+w.w);
+  newL.forEach(id => { add(id, true); add(id); add(id); });
+  newH.forEach(id => { add(id, true); add(id); });
+  newW.forEach(id => { add(id, true); add(id); });
+  // 2. review: spaced, weakest/due first. Small pools repeat more (early levels).
+  const heartReady = h => state.intro['H:'+h] || newH.includes('H:'+h);
+  const pool = avail.filter(id => state.intro[id] || newL.includes(id) || newH.includes(id) || newW.includes(id) || (id[0] === 'S' && SMAP[id].hearts.every(heartReady)));
+  const cap = pool.length < 4 ? 5 : pool.length < 10 ? 3 : 2;
+  const ranked = pool.map(id => [id, priority(id)]).sort((a,b) => b[1] - a[1]).map(x => x[0]);
+  let guard = 0;
+  while (entries.length < N && guard++ < 200){ let added = false;
+    for (const id of ranked){ if (entries.length >= N) break; if ((count[id] || 0) < cap && (count[id] || 0) < 1 + Math.floor(guard / 2)){ add(id); added = true; } }
+    if (!added && guard > 12) break; }
+  // 3. order: interleave, keep same item >=2 apart, teach step before first use with a gap
+  const steps = [], introAt = {}; let pending = entries.slice(), last = [];
+  const scored = () => steps.filter(s => !s.teach).length;
+  // put the earliest-needed intros first
+  while (pending.length){
+    const intros = pending.filter(e => e.needIntro && !(e.id in introAt));
+    const canUse = e => !last.includes(e.id) && (!(newL.includes(e.id) || newH.includes(e.id) || newW.includes(e.id)) || (e.id in introAt && steps.length - introAt[e.id] >= 2));
+    let elig = pending.filter(e => !e.needIntro && canUse(e));
+    const lastTeach = steps.length && steps[steps.length-1].teach;
+    if (intros.length && (!lastTeach) && (steps.length === 0 || Math.random() < 0.5 || !elig.length)){
+      const e = intros[0]; introAt[e.id] = steps.length; const k = e.id[0];
+      steps.push({teach:true, id:e.id, act: k === 'L' ? 'meet' : k === 'H' ? 'heartMeet' : 'blendModel'});
+      e.needIntro = false; last = [e.id]; continue; }
+    if (!elig.length) elig = pending.filter(e => !e.needIntro && (e.id in introAt || !(newL.includes(e.id)||newH.includes(e.id)||newW.includes(e.id))) && !last.includes(e.id));
+    if (!elig.length) elig = pending.filter(e => !e.needIntro);
+    if (!elig.length){ const e = pending.find(e => e.needIntro); if (!e) break; introAt[e.id] = steps.length; steps.push({teach:true, id:e.id, act: e.id[0]==='L'?'meet':e.id[0]==='H'?'heartMeet':'blendModel'}); e.needIntro = false; continue; }
+    // prefer items whose reps are behind (spread reps), slight randomness
+    elig.sort((a,b) => a.rep - b.rep || Math.random() - .5);
+    const e = elig[0]; pending.splice(pending.indexOf(e), 1);
+    steps.push({id:e.id, act: chooseAct(e.id, e.rep)}); last = [...last, e.id].slice(-2);
+  }
+  return steps;
+}
+
+// ---------------- session runner ----------------
+async function startSession(){
+  const steps = buildPlan();
+  SESSION = { id: 's' + Date.now().toString(36), start: Date.now(), steps, idx: 0, n: 0, c: 0, requeued: {}, abort: null, practiced: new Set() };
+  state.sessions.push({ id: SESSION.id, start: SESSION.start, end: SESSION.start, dur: 0, n: 0, c: 0, level: state.level, done: false, items: {} });
+  if (state.sessions.length > 1000) state.sessions.shift();
+  save();
+  renderPlay(); show('play');
+  let abortRes; SESSION.abortP = new Promise(r => abortRes = r); SESSION.abort = abortRes;
+  await Speech.say([`Hi ${state.name}! Let's read.`]);
+  for (SESSION.idx = 0; SESSION.idx < SESSION.steps.length; SESSION.idx++){
+    const minutes = (Date.now() - SESSION.start) / 6e4;
+    if (minutes >= state.settings.maxMin && SESSION.n >= 5) break;
+    const step = SESSION.steps[SESSION.idx]; drawDots();
+    const r = await Promise.race([runStep(step), SESSION.abortP]);
+    if (r && r.aborted) return endSession(true);
+    if (r && r.scored){ recordAttempt(step.id, r.correct, step.act, r.help); SESSION.practiced.add(step.id);
+      if (!r.correct && !SESSION.requeued[step.id]){ SESSION.requeued[step.id] = 1; const at = Math.min(SESSION.idx + 3, SESSION.steps.length);
+        SESSION.steps.splice(at, 0, {id: step.id, act: step.act === 'build' ? 'readPicOrHear' : step.act}); } }
+    if (r && r.teach){ state.intro[step.id] = Date.now(); save(); }
+    const nx = await Promise.race([waitNext(), SESSION.abortP]); if (nx && nx.aborted) return endSession(true);
+  }
+  endSession(false);
+}
+function runStep(step){ Speech.cancel(); setUni(null); $('#stage').innerHTML = ''; hideNext();
+  let act = step.act; if (act === 'readPicOrHear') act = (step.id[0]==='W' && WMAP[step.id.slice(2)].e) ? 'readPic' : 'hearPick';
+  if (act === 'hearPick' && WORDS.filter(x => x.level <= state.level).length < 3) act = WMAP[step.id.slice(2)].e ? 'readPic' : 'build';
+  step.shown = act; return ACTS[act](step); }
+function renderPlay(){
+  $('#play').innerHTML = `<div class="topbar"><button class="homebtn" id="quit" aria-label="Stop">✕</button><div class="dots" id="dots"></div><div style="width:56px"></div></div>
+   <div class="playmain"><div class="leftcol"><button class="speaker" id="replay" aria-label="Hear it again">${SPEAKER}</button></div>
+   <div id="stage"></div><div class="rightcol"><button class="next" id="next" aria-label="Next">${ARROW}</button></div></div>
+   <div class="uni-corner">${unicornSVG()}</div>`;
+  $('#replay').onclick = () => { if (PROMPT) PROMPT(); };
+  $('#quit').onclick = confirmQuit;
+}
+function drawDots(){ const d = $('#dots'); if (!d) return; const n = SESSION.steps.length; let h = '';
+  for (let i = 0; i < n; i++) h += `<i class="${i < SESSION.idx ? 'done' : i === SESSION.idx ? 'cur' : ''}"></i>`; d.innerHTML = h; }
+let PROMPT = null;
+function prompt(fn){ PROMPT = fn; return fn(); }
+function hideNext(){ const n = $('#next'); if (n) n.classList.remove('show'); }
+function waitNext(){ return new Promise(res => { const n = $('#next'); n.classList.add('show'); n.onclick = () => { n.onclick = null; Speech.unlock(); hideNext(); res({}); }; }); }
+function confirmQuit(){
+  const m = $('#modal'); m.innerHTML = `<div class="card gate"><div class="q" style="font-size:24px">Stop for today?</div>
+   <div class="row" style="gap:20px"><button class="tile small" id="qy" aria-label="Yes, stop">✓</button><button class="tile small" id="qn" aria-label="No, keep going">↩</button></div></div>`;
+  m.classList.add('on'); Speech.say(['Do you want to stop?']);
+  $('#qy').onclick = () => { m.classList.remove('on'); SESSION && SESSION.abort && SESSION.abort({aborted:true}); };
+  $('#qn').onclick = () => { m.classList.remove('on'); Speech.cancel(); };
+}
+function endSession(aborted){
+  Speech.cancel(); const s = curSessRec(); const ses = SESSION; SESSION = null; PROMPT = null;
+  if (!s) return renderHome();
+  s.end = Date.now(); s.dur = Math.round((s.end - s.start) / 1000);
+  const total = ses.steps.filter(x => !x.teach).length;
+  s.done = !aborted || s.n >= Math.ceil(total * 0.6);
+  if (s.n === 0 && aborted){ state.sessions = state.sessions.filter(x => x.id !== s.id); save(); return renderHome(); }
+  const prevRainbow = state.rainbow; if (s.done) state.rainbow++;
+  let leveled = false;
+  if (s.done && state.level < MAXLEVEL && levelCheck(state.level).ok){ state.level++; leveled = true; s.levelUp = state.level; }
+  save();
+  renderFinish(s, ses, prevRainbow, leveled);
+}
+function renderFinish(s, ses, prevRainbow, leveled){
+  const prac = [...ses.practiced]; const words = prac.filter(id => id[0]==='W' || id[0]==='H').map(id => itemLabel(id).replace('♥ ',''));
+  const lets = prac.filter(id => id[0]==='L').map(id => id.slice(2)); const sents = prac.filter(id => id[0]==='S').length;
+  $('#finish').innerHTML = `<div class="stars"></div><h2>All done for today, ${esc(state.name)}!</h2>
+   <div style="width:min(70vw,560px)">${rainbowSVG(state.rainbow, 20, s.done ? prevRainbow : null)}</div>
+   <div class="summary">${lets.map(l => `<span class="chip">${l}</span>`).join('')}${words.slice(0,12).map(w => `<span class="chip">${esc(w)}</span>`).join('')}</div>
+   ${leveled ? `<div style="font-size:24px;color:var(--muted)">Next time: a new letter!</div>` : ''}
+   <button class="homebig" id="fh">🏠</button>`;
+  show('finish');
+  const u = document.querySelector('#finish #rbUni');
+  if (u && s.done){ setTimeout(() => { const tx = +u.dataset.tx, ty = +u.dataset.ty, fx = +u.getAttribute('x'), fy = +u.getAttribute('y'); const t0 = performance.now();
+    const stepA = t => { const k = Math.min(1, (t - t0) / 1600); u.setAttribute('x', fx + (tx - fx) * k); u.setAttribute('y', fy + (ty - fy) * k - Math.sin(k * Math.PI) * 18); if (k < 1) requestAnimationFrame(stepA); };
+    requestAnimationFrame(stepA); }, 400); }
+  const parts = [`All done for today, ${state.name}!`];
+  if (words.length) parts.push(`You read ${words.length} word${words.length>1?'s':''}` + (sents ? ` and ${sents} sentence${sents>1?'s':''}.` : '.'));
+  if (s.done) parts.push('The unicorn walked one step on the rainbow.');
+  if (leveled) parts.push('Next time, you will meet a new letter.');
+  $('#fh').onclick = () => { Speech.cancel(); renderHome(); };
+  Speech.say(parts);
+}
+
+// ===================== ACTIVITIES =====================
+// Each returns a Promise resolving {scored, correct, help} or {teach:true}.
+function sparkle(el){ const s = document.createElement('div'); s.className = 'sparkle';
+  [[10,10],[80,0],[90,70],[0,75]].forEach(([x,y],i) => { const sp = document.createElement('span'); sp.textContent = '✦'; sp.style.left = x+'%'; sp.style.top = y+'%'; sp.style.animationDelay = (i*90)+'ms'; s.appendChild(sp); });
+  el.appendChild(s); setTimeout(() => s.remove(), 1300); }
+function tileBtn(html, cls = ''){ const b = document.createElement('button'); b.className = 'tile ' + cls; b.innerHTML = html; return b; }
+// Generic multiple-choice: options [{html, ok, onWrongSay}], returns promise after correct tap (errorless correction)
+function choose(container, opts, {cls = '', onRight, onWrong}){
+  return new Promise(res => { let first = true; const btns = [];
+    opts.forEach(o => { const b = tileBtn(o.html, cls); b.dataset.ok = o.ok ? 1 : 0; btns.push(b); container.appendChild(b);
+      b.onclick = async () => { if (b.disabled) return;
+        if (o.ok){ btns.forEach(x => x.disabled = true); b.classList.remove('hint'); b.classList.add('good'); sparkle(b); setUni('nod');
+          await (onRight ? onRight(first) : null); res({scored:true, correct:first}); }
+        else { b.classList.add('miss'); b.disabled = true; setUni('tilt'); const right = btns.find(x => x.dataset.ok === '1');
+          if (first){ first = false; } right.classList.add('hint'); if (onWrong) await onWrong(o); } }; });
+  }); }
+function lettersFoils(target, n){
+  const known = knownLetters(state.level).filter(l => l !== target && SAME_SOUND[target] !== l);
+  let f = shuffle(known).slice(0, n);
+  if (f.length < n){ const more = LETTERS.map(l => l.id).filter(l => l !== target && !f.includes(l) && SAME_SOUND[target] !== l && !known.includes(l)); f = f.concat(more.slice(0, n - f.length)); }
+  return f;
+}
+function wordBox(word, {tappable = true, heart = null, sm = false} = {}){
+  const box = document.createElement('div'); box.className = 'word' + (sm ? ' sm' : '');
+  const gs = graphemes(word); const ws = word; let ci = 0; let help = 0;
+  gs.forEach((g, i) => { const sp = document.createElement('span'); sp.className = 'g'; const disp = ws.slice(ci, ci + g.length); ci += g.length; sp.textContent = disp;
+    if (heart && heart.includes(i)) sp.classList.add('heart');
+    if (tappable && LMAP[g] && !(heart && heart.includes(i))){ sp.onclick = () => { help++; sp.classList.add('lit'); Speech.say([pureSound(g)]).then(() => sp.classList.remove('lit')); }; }
+    box.appendChild(sp); });
+  const sw = document.createElement('div'); sw.className = 'sweep'; box.appendChild(sw);
+  box.getHelp = () => help; return box;
+}
+// Model blending: light each letter + its sound, then sweep and say the word (slow, then normal)
+async function modelBlend(box, word){ const spans = [...box.querySelectorAll('.g')], gs = graphemes(word);
+  for (let i = 0; i < gs.length; i++){ spans[i].classList.add('lit'); await Speech.say([pureSound(gs[i])]); await sleep(150); spans[i].classList.remove('lit'); }
+  const sw = box.querySelector('.sweep'); sw.classList.remove('go'); void sw.offsetWidth; sw.classList.add('go'); spans.forEach(s => s.classList.add('lit'));
+  await Speech.say([{t: word, rate: 0.5}, {pause: 250}, {t: word}]); spans.forEach(s => s.classList.remove('lit')); sw.classList.remove('go'); }
+function pictureFoils(target, n){ // emoji words, prefer ones sharing letters/positions with the target
+  const t = WMAP[target]; const cands = WORDS.filter(w => w.e && w.w !== target && w.e !== t.e);
+  const score = w => { let s = 0; const a = graphemes(w.w), b = graphemes(target); for (let i = 0; i < Math.min(a.length,b.length); i++) if (a[i] === b[i]) s += 2; for (const g of a) if (b.includes(g)) s += 1; return s + Math.random() * 1.5; };
+  const out = []; const used = new Set([t.e]);
+  for (const w of cands.sort((x,y) => score(y) - score(x))){ if (!used.has(w.e)){ out.push(w); used.add(w.e); } if (out.length >= n) break; }
+  return out; }
+function wordFoils(target, n){ const avail = WORDS.filter(w => w.level <= state.level && w.w !== target).map(w => w.w);
+  const diff = (a,b) => { const x = graphemes(a), y = graphemes(b); if (x.length !== y.length) return 9; let d = 0; for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) d++; return d; };
+  const ranked = shuffle(avail).sort((a,b) => diff(a,target) - diff(b,target)); return ranked.slice(0, n); }
+
+const ACTS = {
+  // ---- teach a new letter sound ----
+  async meet(step){ const id = step.id.slice(2), L = LMAP[id], st = $('#stage');
+    const big = document.createElement('button'); big.className = 'bigletter'; big.innerHTML = `${id}<span class="upper">${id === 'qu' ? 'Qu' : id.toUpperCase()}</span>`; st.appendChild(big);
+    if (L.pics[0]){ const p = document.createElement('div'); p.className = 'tile pic'; p.textContent = L.pics[0][1]; st.appendChild(p); }
+    big.onclick = () => { big.classList.add('good'); Speech.say(sound(id)).then(() => big.classList.remove('good')); };
+    await prompt(() => Speech.say(['Here is a new letter.', {pause:300}, 'This letter says', {pause:200}, ...sound(id), {pause:400}, 'Say it with me.', {pause:200}, ...sound(id, false), {pause:500}, 'Tap the letter to hear it again.']));
+    return {teach:true}; },
+  // ---- hear a sound, tap the letter ----
+  async hearTap(step){ const id = step.id.slice(2), st = $('#stage'); const n = state.level <= 3 ? 1 : 2;
+    const opts = shuffle([id, ...lettersFoils(id, n)]).map(l => ({html:l, ok:l === id, l}));
+    const row = document.createElement('div'); row.className = 'row'; st.appendChild(row);
+    const say = () => Speech.say(['Tap the letter that says', {pause:200}, ...sound(id)]);
+    const p = choose(row, opts, { onRight: () => Speech.say(['Yes!', ...sound(id, false)]),
+      onWrong: o => Speech.say(['That one says', ...sound(o.l, false), {pause:300}, 'We want', ...sound(id, false)]) });
+    prompt(say); return p; },
+  // ---- see a letter, pick the picture that starts with its sound ----
+  async letterPic(step){ const id = step.id.slice(2), L = LMAP[id], st = $('#stage');
+    const big = document.createElement('div'); big.className = 'bigletter'; big.style.fontSize = 'min(24vmin,190px)'; big.textContent = id; st.appendChild(big);
+    const [tn, te] = pick(L.pics);
+    const foils = shuffle(LETTERS.filter(x => x.id !== id && SAME_SOUND[id] !== x.id && x.pics.length)).slice(0, 2).map(x => pick(x.pics));
+    const row = document.createElement('div'); row.className = 'row'; st.appendChild(row);
+    const opts = shuffle([{html:te, ok:true, n:tn}, ...foils.map(([n2,e2]) => ({html:e2, ok:false, n:n2}))]);
+    const p = choose(row, opts, { cls:'pic', onRight: () => Speech.say(['Yes!', tn, 'starts with', ...sound(id, false)]),
+      onWrong: o => Speech.say(['That is', o.n, {pause:300}, 'Listen.', tn, 'starts with', ...sound(id, false)]) });
+    prompt(() => Speech.say(['What sound does this letter make?', {pause:250}, 'Tap the picture that starts with that sound.'])); return p; },
+  // ---- model blending a new word ----
+  async blendModel(step){ const w = step.id.slice(2), st = $('#stage'); const box = wordBox(w); st.appendChild(box);
+    const run = async () => { await Speech.say(["Let's blend a new word. Watch and listen."]); await modelBlend(box, w); await Speech.say(['Now you. Tap each letter, then say the word.']); };
+    await prompt(run); return {teach:true}; },
+  // ---- read a word, pick the picture ----
+  async readPic(step){ const w = step.id.slice(2), W = WMAP[w], st = $('#stage'); const box = wordBox(w); st.appendChild(box);
+    const row = document.createElement('div'); row.className = 'row'; st.appendChild(row);
+    const opts = shuffle([{html:W.e, ok:true, w}, ...pictureFoils(w, 2).map(f => ({html:f.e, ok:false, w:f.w}))]);
+    const tip = state.level <= 8 ? [{pause:300}, 'You can tap the letters to hear their sounds.'] : [];
+    const p = choose(row, opts, { cls:'pic', onRight: async () => { await modelBlend(box, w); },
+      onWrong: async o => { await Speech.say(['That picture is', o.w, {pause:300}, 'Listen.']); await modelBlend(box, w); } });
+    prompt(() => Speech.say(['Read the word. Then tap the picture that matches.', ...tip]));
+    const r = await p; r.help = box.getHelp(); return r; },
+  // ---- hear a word, pick the written word ----
+  async hearPick(step){ const w = step.id.slice(2), st = $('#stage'); const row = document.createElement('div'); row.className = 'row'; st.appendChild(row);
+    const opts = shuffle([w, ...wordFoils(w, 2)]).map(x => ({html:esc(x), ok:x === w, w:x}));
+    const p = choose(row, opts, { cls:'wordt', onRight: () => Speech.say(['Yes!', w]),
+      onWrong: o => Speech.say(['That word is', o.w, {pause:300}, 'Find', {t:w, rate:0.6}]) });
+    prompt(() => Speech.say(['Tap the word', {pause:200}, {t:w, rate:0.7}])); return p; },
+  // ---- build (spell) the word from letter tiles ----
+  async build(step){ const w = step.id.slice(2), W = WMAP[w], st = $('#stage'), gs = graphemes(w);
+    if (W.e){ const pic = document.createElement('button'); pic.className = 'tile pic'; pic.textContent = W.e; pic.onclick = () => Speech.say([{t:w, rate:0.5}]); st.appendChild(pic); }
+    const slots = document.createElement('div'); slots.className = 'slots'; gs.forEach(() => { const s = document.createElement('div'); s.className = 'slot'; slots.appendChild(s); }); st.appendChild(slots);
+    const extra = lettersFoils(gs[0], 6).filter(l => !gs.includes(l)).slice(0, gs.length > 2 ? 2 : 1);
+    const row = document.createElement('div'); row.className = 'row'; st.appendChild(row);
+    let pos = 0, errs = 0, slotErr = 0;
+    prompt(() => Speech.say(["Let's spell", {t:w, rate:0.7}, {pause:200}, 'Tap the letters in order.']));
+    return new Promise(res => {
+      shuffle([...gs, ...extra]).forEach(g => { const b = tileBtn(g, 'small'); row.appendChild(b);
+        b.onclick = async () => { if (b.classList.contains('used')) return;
+          if (g === gs[pos]){ const s = slots.children[pos]; s.textContent = g; s.classList.add('filled'); b.classList.add('used'); pos++; slotErr = 0;
+            row.querySelectorAll('.hint').forEach(x => x.classList.remove('hint')); Speech.say([pureSound(g)]);
+            if (pos === gs.length){ setUni(errs ? null : 'nod'); sparkle(slots); await sleep(500);
+              const box = wordBox(w, {tappable:false, sm:true}); st.insertBefore(box, row); row.remove(); await Speech.say([errs ? 'There it is.' : 'Yes!']); await modelBlend(box, w);
+              res({scored:true, correct: errs === 0}); } }
+          else { errs++; slotErr++; b.classList.remove('shake'); void b.offsetWidth; b.classList.add('shake'); setUni('tilt');
+            await Speech.say(['That says', pureSound(g), {pause:250}, 'Listen.', {t:w, rate:0.5}]);
+            if (slotErr >= 2){ const right = [...row.children].find(x => x.textContent === gs[pos] && !x.classList.contains('used')); if (right) right.classList.add('hint'); } } }; });
+    }); },
+  // ---- teach a heart word ----
+  async heartMeet(step){ const k = step.id.slice(2), H = HMAP[k], st = $('#stage'); const box = wordBox(H.w, {heart:H.heart, tappable:false}); st.appendChild(box);
+    await prompt(() => Speech.say(['This is a heart word.', {pause:300}, {t:H.w, rate:0.7}, {pause:400}, 'The part with the heart is tricky. We learn it by heart.', {pause:300}, 'Say it with me.', {t:H.w, rate:0.7}]));
+    return {teach:true}; },
+  // ---- find the heart word ----
+  async heartPick(step){ const k = step.id.slice(2), H = HMAP[k], st = $('#stage'); const row = document.createElement('div'); row.className = 'row'; st.appendChild(row);
+    const others = shuffle([...HEARTS.filter(h => h[1] <= state.level && h[0].toLowerCase() !== k).map(h => h[0]), ...WORDS.filter(w => w.level <= state.level && w.w.length <= 4).map(w => w.w)]).filter(x => x.toLowerCase() !== k);
+    const foils = [...new Set(others)].slice(0, 2);
+    const opts = shuffle([H.w, ...foils]).map(x => ({html:esc(x), ok:x === H.w, w:x}));
+    const p = choose(row, opts, { cls:'wordt', onRight: () => Speech.say(['Yes!', {t:H.w, rate:0.8}]),
+      onWrong: o => Speech.say(['That word is', o.w, {pause:300}, 'Find', {t:H.w, rate:0.7}]) });
+    prompt(() => Speech.say(['Find the heart word', {pause:200}, {t:H.w, rate:0.7}])); return p; },
+  // ---- read a decodable sentence, pick the matching picture pair ----
+  async sentence(step){ const S = SMAP[step.id], st = $('#stage'); let help = 0;
+    const box = document.createElement('div'); box.className = 'sentence';
+    const words = S.s.split(' ').map(t => { const sp = document.createElement('span'); sp.className = 'w'; sp.textContent = t; const clean = t.replace(/[.!?,]/g,'');
+      sp.onclick = () => { help++; sp.classList.add('lit'); Speech.say([{t:clean, rate:0.75}]).then(() => sp.classList.remove('lit')); }; box.appendChild(sp); return [sp, clean]; });
+    st.appendChild(box);
+    const subjPool = [...new Set(SENTS.map(x => x.a))].filter(e => e !== S.a), objPool = [...new Set(SENTS.map(x => x.b))].filter(e => e !== S.b && e !== S.a);
+    const d1 = [S.a, pick(objPool)], d2 = [pick(subjPool.filter(e => e !== S.b)), S.b];
+    const row = document.createElement('div'); row.className = 'row'; st.appendChild(row);
+    const readAloud = async () => { for (const [sp, clean] of words){ sp.classList.add('lit'); await Speech.say([{t:clean, rate:0.8}]); sp.classList.remove('lit'); } };
+    const opts = shuffle([{html:S.a + S.b, ok:true}, {html:d1.join(''), ok:false}, {html:d2.join(''), ok:false}]);
+    const p = choose(row, opts, { cls:'pair', onRight: async () => { await Speech.say(['Yes!']); await readAloud(); },
+      onWrong: async () => { await Speech.say(['Not quite. Listen.']); await readAloud(); } });
+    prompt(() => Speech.say(['Read the sentence. Then tap the picture that matches.']));
+    const r = await p; r.help = help; return r; },
+};
+
+// ===================== PARENT GATE + DASHBOARD =====================
+function openGate(){
+  const a = 6 + Math.floor(Math.random() * 7), b = 5 + Math.floor(Math.random() * 8); let val = '';
+  const m = $('#modal'); m.innerHTML = `<div class="card gate"><div class="note">For grown-ups</div><div class="q">${a} + ${b} = ?</div><div class="ans" id="ga"></div>
+   <div class="pad">${[1,2,3,4,5,6,7,8,9,'⌫',0,'✓'].map(k => `<button data-k="${k}">${k}</button>`).join('')}</div><button class="btn alt" id="gc" style="margin-top:12px">Cancel</button></div>`;
+  m.classList.add('on');
+  m.querySelectorAll('.pad button').forEach(btn => btn.onclick = () => { const k = btn.dataset.k;
+    if (k === '⌫') val = val.slice(0, -1); else if (k === '✓'){ if (+val === a + b){ m.classList.remove('on'); renderDash(); } else { val = ''; $('#ga').classList.add('shake'); setTimeout(() => $('#ga').classList.remove('shake'), 400); } }
+    else if (val.length < 3) val += k; $('#ga').textContent = val; });
+  $('#gc').onclick = () => m.classList.remove('on');
+}
+function fmtDate(t){ const d = new Date(t); return d.toLocaleDateString(undefined, {month:'short', day:'numeric'}) + ' ' + d.toLocaleTimeString(undefined, {hour:'numeric', minute:'2-digit'}); }
+function dayKey(t){ const d = new Date(t); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
+function lineChart(points){ // points: [{x:label, y:0..1}]
+  const W = 520, H = 180, P = 30; if (!points.length) return '<div class="note">No sessions yet.</div>';
+  const n = points.length, xs = i => P + (n === 1 ? (W-2*P)/2 : i * (W - 2*P) / (n - 1)), ys = y => H - P - y * (H - 2*P);
+  let s = `<svg viewBox="0 0 ${W} ${H}" style="width:100%">`;
+  [0, .5, .8, 1].forEach(g => s += `<line x1="${P}" x2="${W-P}" y1="${ys(g)}" y2="${ys(g)}" stroke="${g === .8 ? '#c4ecd9' : '#eee'}" stroke-width="${g === .8 ? 2 : 1}"/><text x="2" y="${ys(g)+4}" font-size="11" fill="#999">${Math.round(g*100)}%</text>`);
+  s += `<polyline fill="none" stroke="#9b82c9" stroke-width="3" points="${points.map((p,i) => xs(i)+','+ys(p.y)).join(' ')}"/>`;
+  points.forEach((p,i) => s += `<circle cx="${xs(i)}" cy="${ys(p.y)}" r="4" fill="#e391b5"><title>${esc(p.x)}: ${Math.round(p.y*100)}%</title></circle>`);
+  return s + `<text x="${P}" y="${H-6}" font-size="11" fill="#999">${esc(points[0].x)}</text><text x="${W-P}" y="${H-6}" font-size="11" fill="#999" text-anchor="end">${esc(points[n-1].x)}</text></svg>`; }
+function barChart(days){ const W = 520, H = 170, P = 26, n = days.length, max = Math.max(5, ...days.map(d => d.min));
+  const bw = (W - 2*P) / n; let s = `<svg viewBox="0 0 ${W} ${H}" style="width:100%">`;
+  days.forEach((d,i) => { const h = (d.min / max) * (H - 2*P); const x = P + i*bw;
+    s += `<rect x="${x+3}" y="${H-P-h}" width="${bw-6}" height="${h}" rx="4" fill="#c4e1f7"><title>${d.label}: ${d.n} session(s), ${d.min.toFixed(1)} min</title></rect>`;
+    if (d.n) s += `<text x="${x+bw/2}" y="${H-P-h-4}" font-size="11" text-anchor="middle" fill="#7a7290">${d.n}</text>`;
+    if (i % 2 === 0 || n <= 7) s += `<text x="${x+bw/2}" y="${H-8}" font-size="10" text-anchor="middle" fill="#999">${d.label}</text>`; });
+  return s + `<text x="2" y="14" font-size="11" fill="#999">min/day (number = sessions)</text></svg>`; }
+function renderDash(){
+  const L = state.level, sess = state.sessions.filter(s => s.n > 0);
+  const lc = levelCheck(L);
+  const letterGrid = LETTERS.map((l,i) => { const id = 'L:'+l.id, it = state.items[id]; const cls = mastered(id) ? 'mast' : (it && it.a) ? 'learn' : '';
+    return `<div class="lg ${cls} ${i+1 === L ? 'cur' : ''}" title="${l.id}: ${it ? it.c+'/'+it.a+' correct' : 'not yet'}">${l.id}</div>`; }).join('');
+  const wordsAvail = WORDS.filter(w => w.level <= L), hearts = HEARTS.filter(h => h[1] <= L);
+  const wordChips = wordsAvail.map(w => { const id = 'W:'+w.w, it = state.items[id]; return `<span class="${mastered(id) ? 'm' : ''}" title="${it ? it.c+'/'+it.a : 'not yet'}">${w.w}</span>`; }).join('');
+  const heartChips = hearts.map(h => { const id = 'H:'+h[0].toLowerCase(); return `<span class="${mastered(id) ? 'm' : ''}">♥ ${h[0]}</span>`; }).join('') || '<span class="note">none yet</span>';
+  const nMastW = wordsAvail.filter(w => mastered('W:'+w.w)).length;
+  const struggles = Object.entries(state.items).filter(([id,it]) => it.a >= 2).map(([id,it]) => [id, it, recentAcc(it, 6)]).filter(x => x[2] < 0.8).sort((a,b) => a[2] - b[2] || b[1].a - a[1].a).slice(0, 10);
+  const pts = sess.slice(-30).map(s => ({x: new Date(s.start).toLocaleDateString(undefined, {month:'short', day:'numeric'}), y: s.n ? s.c / s.n : 0}));
+  const days = []; for (let i = 13; i >= 0; i--){ const t = Date.now() - i*DAY, k = dayKey(t); const ds = sess.filter(s => dayKey(s.start) === k);
+    days.push({label: new Date(t).toLocaleDateString(undefined, {month:'numeric', day:'numeric'}), n: ds.length, min: ds.reduce((a,s) => a + s.dur/60, 0)}); }
+  const totalMin = sess.reduce((a,s) => a + s.dur/60, 0), totAtt = sess.reduce((a,s) => a + s.n, 0), totC = sess.reduce((a,s) => a + s.c, 0);
+  const voices = Speech.voices.map(v => `<option value="${esc(v.voiceURI)}" ${Speech.voice && v.voiceURI === Speech.voice.voiceURI ? 'selected' : ''}>${esc(v.name)} (${v.lang})</option>`).join('');
+  const levelOpts = LETTERS.map((l,i) => `<option value="${i+1}" ${i+1 === L ? 'selected' : ''}>Level ${i+1}: ${l.id}</option>`).join('');
+  $('#dash').innerHTML = `
+   <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><div><h2>${esc(state.name)}’s reading progress</h2>
+   <div class="sub">Level ${L} of ${MAXLEVEL} · newest letter <b>${LETTERS[L-1].id}</b> · ${sess.length} sessions · ${totalMin.toFixed(0)} min total · ${totAtt ? Math.round(100*totC/totAtt) : 0}% correct overall</div></div>
+   <button class="btn" id="dclose">Back to ${esc(state.name)}’s screen</button></div>
+   <div class="grid">
+    <div class="panel"><h3>Letter sounds</h3><div class="lgrid">${letterGrid}</div>
+      <div class="legend"><span style="background:var(--mint);padding:0 6px;border-radius:4px">mastered</span> <span style="background:var(--butter);padding:0 6px;border-radius:4px">learning</span> outlined = current level. Mastered = at least 80% of the last 5 tries, 3+ tries over 2+ sessions.</div>
+      <div class="note" style="margin-top:8px">To unlock level ${L+1}: letter <b>${LETTERS[L-1].id}</b> ${lc.lets.every(mastered) ? '✓' : '…'}${lc.hearts.length ? ` · heart words ${lc.hearts.map(h => h.slice(2)).join(', ')} ${lc.hearts.every(mastered) ? '✓' : '…'}` : ''}${lc.needW ? ` · ${lc.okW}/${lc.needW} new words mastered` : ''}</div></div>
+    <div class="panel"><h3>Accuracy per session</h3>${lineChart(pts)}<div class="legend">Green line = 80% mastery target. Scored on first try; a hint tap still counts as correct.</div></div>
+    <div class="panel"><h3>Practice over the last 14 days</h3>${barChart(days)}</div>
+    <div class="panel"><h3>Needs practice</h3>${struggles.length ? `<table><tr><th>Item</th><th>Recent</th><th>Tries</th><th>Last seen</th></tr>${struggles.map(([id,it,acc]) => `<tr><td>${esc(itemLabel(id))}</td><td>${Math.round(acc*100)}%</td><td>${it.a}</td><td>${fmtDate(it.last)}</td></tr>`).join('')}</table>` : '<div class="note">Nothing below 80% right now.</div>'}<div class="legend">These come back more often automatically.</div></div>
+    <div class="panel"><h3>Words (${nMastW} mastered of ${wordsAvail.length} unlocked)</h3><div class="chips">${wordChips || '<span class="note">Words start at level 2 (am).</span>'}</div>
+      <h3 style="margin-top:14px">Heart words</h3><div class="chips">${heartChips}</div></div>
+    <div class="panel"><h3>Session history</h3><table><tr><th>When</th><th>Min</th><th>Items</th><th>Correct</th><th>Level</th></tr>
+      ${sess.slice(-15).reverse().map(s => `<tr><td>${fmtDate(s.start)}</td><td>${(s.dur/60).toFixed(1)}</td><td>${s.n}</td><td>${s.n ? Math.round(100*s.c/s.n) : 0}%</td><td>${s.level}${s.levelUp ? ' → '+s.levelUp : ''}${s.done ? '' : ' (stopped early)'}</td></tr>`).join('') || '<tr><td colspan=5 class="note">No sessions yet.</td></tr>'}</table></div>
+    <div class="panel"><h3>Settings</h3>
+      <label>Child’s name</label><input id="sName" value="${esc(state.name)}">
+      <label>Items per session</label><select id="sItems">${[8,10,15,20].map(n => `<option ${n === state.settings.items ? 'selected' : ''}>${n}</option>`).join('')}</select>
+      <label>Stop after (minutes)</label><select id="sMin">${[5,7,10,15].map(n => `<option ${n === state.settings.maxMin ? 'selected' : ''}>${n}</option>`).join('')}</select>
+      <label>Voice</label><select id="sVoice"><option value="">Auto</option>${voices}</select>
+      <label>Speech speed: <span id="rv">${state.settings.rate}</span></label><input id="sRate" type="range" min="0.6" max="1.1" step="0.05" value="${state.settings.rate}">
+      <label>How to say letter sounds (when no recording)</label><select id="sMode"><option value="tts" ${state.settings.soundMode==='tts'?'selected':''}>Voice tries the sound + "as in apple"</option><option value="word" ${state.settings.soundMode==='word'?'selected':''}>Keyword only ("the first sound in apple")</option></select>
+      <div><button class="btn alt" id="sTest">Test voice</button></div>
+      <label>Level (move if ${esc(state.name)} already knows letters, or needs a step back)</label><select id="sLevel">${levelOpts}</select>
+      <div><button class="btn" id="sSave">Save settings</button> <span id="saved" class="note"></span></div></div>
+    <div class="panel"><h3>Record letter sounds (recommended)</h3>
+      <div class="note">Computer voices can't say pure letter sounds well (they add "uh" or say letter names). Record yourself saying each sound. Say it short and clean, like /m/, not "em" or "muh". Each recording is about 1.5 seconds and replaces the computer voice for that sound. Recordings stay on this device and are not in the export.</div>
+      <div class="reclist" id="reclist" style="margin-top:10px"></div></div>
+    <div class="panel"><h3>Backup &amp; devices</h3>
+      <div class="note">Progress is saved in this browser only. Use Export/Import to move it to another device or browser.</div>
+      <button class="btn" id="exp">Export progress (.json)</button><label class="btn alt" style="display:inline-block;cursor:pointer">Import…<input type="file" id="imp" accept=".json,application/json" style="display:none"></label>
+      <button class="btn danger" id="rst">Reset all progress</button>
+      <div class="note" style="margin-top:10px">Tip: 1–2 short sessions a day, sitting next to ${esc(state.name)}, works best. Do them at different times, not back to back.</div></div>
+   </div>`;
+  show('dash');
+  $('#dclose').onclick = () => { Speech.cancel(); renderHome(); };
+  $('#sRate').oninput = e => $('#rv').textContent = e.target.value;
+  $('#sTest').onclick = () => { state.settings.voice = $('#sVoice').value; state.settings.rate = +$('#sRate').value; state.settings.soundMode = $('#sMode').value; Speech.choose(); Speech.say(['Tap the letter that says', ...sound('m'), {pause:300}, 'Let\'s blend. ', pureSound('s'), pureSound('a'), pureSound('t'), {t:'sat', rate:0.5}, 'sat']); };
+  $('#sSave').onclick = () => { state.name = $('#sName').value.trim() || 'Anya'; state.settings.items = +$('#sItems').value; state.settings.maxMin = +$('#sMin').value;
+    state.settings.voice = $('#sVoice').value; state.settings.rate = +$('#sRate').value; state.settings.soundMode = $('#sMode').value; Speech.choose();
+    const nl = +$('#sLevel').value; if (nl !== state.level){ state.level = nl; for (let i = 0; i < nl - 1; i++) state.intro['L:'+LETTERS[i].id] = state.intro['L:'+LETTERS[i].id] || Date.now(); }
+    save(); renderDash(); setTimeout(() => { const s = $('#saved'); if (s) s.textContent = 'Saved ✓'; }, 0); };
+  $('#exp').onclick = () => { const blob = new Blob([JSON.stringify(state, null, 1)], {type:'application/json'}); const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = `anya-reads-progress-${dayKey(Date.now())}.json`; document.body.appendChild(a); a.click(); a.remove(); };
+  $('#imp').onchange = e => { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = () => { try { const d = JSON.parse(r.result);
+      if (!d || d.version !== 1 || !d.items) throw new Error('not an Anya Reads file'); if (!confirm('Replace current progress with the imported file?')) return;
+      state = d; load2(); save(); renderDash(); alert('Imported.'); } catch(err){ alert('Could not import: ' + err.message); } }; r.readAsText(f); };
+  $('#rst').onclick = () => { if (confirm('Erase ALL progress for ' + state.name + '? This cannot be undone. (Export first if unsure.)')){ const nm = state.name, st = state.settings; state = defaults(); state.name = nm; state.settings = st; save(); renderDash(); } };
+  renderRecList();
+}
+function load2(){ const d = defaults(); for (const k in d) if (state[k] === undefined) state[k] = d[k]; state.settings = {...d.settings, ...state.settings}; }
+function renderRecList(){
+  const host = $('#reclist'); if (!host) return;
+  host.innerHTML = LETTERS.map(l => `<div class="recrow ${Speech.recs[l.id] ? 'has' : ''}" data-l="${l.id}"><b>${l.id}</b><button class="p" title="Play">▶</button><button class="r" title="Record">Rec</button>${Speech.recs[l.id] ? '<button class="d" title="Delete">Del</button>' : ''}</div>`).join('');
+  host.querySelectorAll('.recrow').forEach(row => { const id = row.dataset.l;
+    row.querySelector('.p').onclick = () => Speech.say([pureSound(id)]);
+    row.querySelector('.r').onclick = () => recordSound(id, row);
+    const d = row.querySelector('.d'); if (d) d.onclick = async () => { await AudioDB.del(id); delete Speech.recs[id]; renderRecList(); }; });
+  if (!AudioDB.db || !window.MediaRecorder) host.insertAdjacentHTML('afterbegin', '<div class="note" style="grid-column:1/-1">Recording isn’t available in this browser (it needs microphone access and https or localhost).</div>');
+}
+async function recordSound(id, row){
+  if (!navigator.mediaDevices || !window.MediaRecorder || !AudioDB.db) return alert('Recording is not supported here.');
+  let stream; try { stream = await navigator.mediaDevices.getUserMedia({audio:true}); } catch(e){ return alert('Microphone permission was not given.'); }
+  row.classList.add('rec'); const chunks = []; const mr = new MediaRecorder(stream);
+  mr.ondataavailable = e => e.data.size && chunks.push(e.data);
+  mr.onstop = async () => { stream.getTracks().forEach(t => t.stop()); row.classList.remove('rec'); const blob = new Blob(chunks, {type: mr.mimeType || 'audio/webm'});
+    await AudioDB.put(id, blob); if (Speech.recs[id]) URL.revokeObjectURL(Speech.recs[id]); Speech.recs[id] = URL.createObjectURL(blob); renderRecList(); Speech.say([{rec:id}]); };
+  await sleep(250); mr.start(); setTimeout(() => mr.state !== 'inactive' && mr.stop(), 1500);
+}
+
+// ===================== BOOT =====================
+(async function boot(){
+  load(); Speech.init(); await AudioDB.open(); await AudioDB.loadAll();
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch(e){} // ask the browser not to evict progress
+  renderHome();
+  window.__anya = { get state(){ return state; }, buildPlan, levelCheck, mastered, available, SENTS, WORDS };
+})();
