@@ -23,6 +23,8 @@ async def main():
             if r.status >= 400: bad.append((r.status, r.url))
             elif '/audio/' in r.url: audio_ok.add(r.url)
         ctx.on('response', on_resp)
+        # the device voice must never be touched while clips are available: on iOS any speech synthesis ducks our audio
+        await ctx.add_init_script("window.__ttsSpeak = 0; if (window.speechSynthesis){ const sp = speechSynthesis.speak.bind(speechSynthesis); speechSynthesis.speak = u => { window.__ttsSpeak++; return sp(u); }; }")
         page = await ctx.new_page(); T.errors = errors
         page.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
         page.on('pageerror', lambda e: errors.append('PAGEERROR ' + str(e)))
@@ -49,6 +51,9 @@ async def main():
         print('clip plays via Web Audio', plays.count('webaudio'), 'via media element', plays.count('media-el'), 'other', [x for x in plays if x not in ('webaudio','media-el')][:3])
         print('AudioContext state', await page.evaluate('__anya.AudioOut.ctx && __anya.AudioOut.ctx.state'))
         print('device-voice fallbacks:', sorted(set(fb)) or 'none')
+        nspeak = await page.evaluate('window.__ttsSpeak'); print('speechSynthesis.speak calls during clip sessions:', nspeak); assert nspeak == 0, 'speechSynthesis used (would duck audio on iOS)'
+        lead = await page.evaluate("(async () => { const O = __anya.AudioOut; O.lastEnd = performance.now() - 5000; const C = __anya.Clips; const u = await C.load('yes'); const b = await O.decode(u); const t0 = O.ctx.currentTime; let st = 0; const orig = O.ctx.createBufferSource.bind(O.ctx); O.ctx.createBufferSource = () => { const s = orig(); const s0 = s.start.bind(s); s.start = w => { st = w - O.ctx.currentTime; s0(w); }; return s; }; await O.play(b); O.ctx.createBufferSource = orig; return Math.round(st * 1000); })()")
+        print('silent pre-roll before a screen-start clip:', lead, 'ms'); assert 250 <= lead <= 350
         # wait for background precache of every clip
         n = await page.evaluate("""new Promise(res => { navigator.serviceWorker.addEventListener('message', e => e.data.type === 'audio-cached' && res(e.data.n));
             navigator.serviceWorker.controller.postMessage({type:'precache-audio'}); setTimeout(() => res(-1), 120000); })""")

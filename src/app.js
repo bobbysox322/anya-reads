@@ -2,7 +2,18 @@
 // ===================== UTIL =====================
 const $ = s => document.querySelector(s);
 const QS = new URLSearchParams(location.search);
-const MUTE = QS.has('mute');          // testing: skip speech
+const MUTE = QS.has('mute');
+// On-device debug log (Grown-ups → Debug log). Keeps the last 150 events and errors in localStorage so a parent can report them.
+const DBG = { key:'anyaReads.debug', list:[],
+  init(){ try { this.list = JSON.parse(localStorage.getItem(this.key) || '[]'); } catch(e){ this.list = []; }
+    addEventListener('error', e => this.log('ERROR ' + (e.message || e) + (e.filename ? ' @' + String(e.lineno) : '')));
+    addEventListener('unhandledrejection', e => this.log('PROMISE ' + ((e.reason && (e.reason.stack || e.reason.message)) || e.reason)));
+    const w = console.warn.bind(console), er = console.error.bind(console);
+    console.warn = (...a) => { this.log('warn ' + a.map(String).join(' ')); w(...a); }; console.error = (...a) => { this.log('error ' + a.map(String).join(' ')); er(...a); }; },
+  log(msg){ const t = new Date(); const line = `${t.toTimeString().slice(0,8)} ${String(msg).slice(0,300)}`; this.list.push(line); if (this.list.length > 150) this.list.splice(0, this.list.length - 150);
+    try { localStorage.setItem(this.key, JSON.stringify(this.list)); } catch(e){}
+    const o = document.getElementById('dbgOverlay'); if (o){ o.textContent = this.list.slice(-8).join('\n'); } } };
+DBG.init();          // testing: skip speech
 const sleep = ms => new Promise(r => setTimeout(r, MUTE ? Math.min(ms, 20) : ms));
 const DAY = 864e5;
 const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
@@ -104,12 +115,12 @@ const AudioOut = { ctx:null, bufs:{}, pend:{}, cur:null, loopEl:null,
   ensure(){ if (this.ctx) return this.ctx; const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return null;
     try { this.ctx = new AC({latencyHint:'interactive'}); } catch(e){ try { this.ctx = new AC(); } catch(e2){ return null; } }
     const c = this.ctx, n = c.sampleRate, b = c.createBuffer(1, n, n), d = b.getChannelData(0);
-    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * 5e-5;
+    for (let i = 0; i < n; i++) d[i] = Math.sin(2 * Math.PI * 20 * i / n) * 1e-3; // 20 Hz at -60 dBFS: inaudible, but not treated as silence
     const src = c.createBufferSource(); src.buffer = b; src.loop = true; src.connect(c.destination); src.start(0);
     document.addEventListener('visibilitychange', () => { if (!this.ctx) return; if (document.hidden) this.ctx.suspend().catch(() => {}); else this.ctx.resume().catch(() => {}); });
     return c; },
   // Called on every tap. Resumes the context and, on iOS, asks for "playback" audio so the mute switch doesn't silence it.
-  unlock(){ const c = this.ensure(); if (!c) return;
+  unlock(){ this.resetIfNeeded(); const c = this.ensure(); if (!c) return;
     try { if (navigator.audioSession && navigator.audioSession.type !== 'playback') navigator.audioSession.type = 'playback'; } catch(e){}
     if (c.state !== 'running') c.resume().catch(() => {});
     if (!navigator.audioSession && /iP(ad|hone|od)|Macintosh/.test(navigator.userAgent) && 'ontouchend' in document && !this.loopEl){
@@ -122,8 +133,14 @@ const AudioOut = { ctx:null, bufs:{}, pend:{}, cur:null, loopEl:null,
       .then(buf => { if (buf) this.bufs[url] = buf; delete this.pend[url]; return buf; }).catch(() => { delete this.pend[url]; return null; })); },
   play(buf){ return new Promise(res => { const c = this.ctx; const src = c.createBufferSource(); src.buffer = buf; src.connect(c.destination);
       let done = false; const fin = () => { if (!done){ done = true; clearTimeout(to); if (this.cur && this.cur.src === src) this.cur = null; res(); } };
-      src.onended = fin; const to = setTimeout(fin, buf.duration * 1000 + 1500); this.cur = {src, fin}; src.start(c.currentTime + 0.005); }); },
-  stop(){ if (this.cur){ const {src, fin} = this.cur; this.cur = null; try { src.onended = null; src.stop(); } catch(e){} fin(); } },
+      // after a pause (a new screen), start on 300 ms of silence so any output ramp happens before the speech
+      const idle = !this.lastEnd || performance.now() - this.lastEnd > 1200; const lead = idle ? 0.3 : 0.005;
+      src.onended = () => { this.lastEnd = performance.now(); fin(); }; const to = setTimeout(fin, (buf.duration + lead) * 1000 + 1500); this.cur = {src, fin}; src.start(c.currentTime + lead); }); },
+  stop(){ if (this.cur){ const {src, fin} = this.cur; this.cur = null; try { src.onended = null; src.stop(); } catch(e){} this.lastEnd = performance.now(); fin(); } },
+  // after the mic: iOS can leave output on the quiet "play and record" route. Next tap: back to playback, recreate the context if it's not running.
+  afterMic(){ this.micUsed = true; try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch(e){} },
+  resetIfNeeded(){ if (!this.micUsed || !this.ctx) return; this.micUsed = false;
+    if (this.ctx.state !== 'running'){ try { this.ctx.close(); } catch(e){} this.ctx = null; this.ensure(); } },
 };
 window.__ttsFallback = [];
 const Speech = {
@@ -134,8 +151,13 @@ const Speech = {
     if (!v){ const pref = ['Samantha','Ava','Allison','Susan','Zoe','Nicky','Google US English','Aria','Jenny','Ana','Karen','Moira','Serena','Tessa'];
       for (const p of pref){ v = this.voices.find(x => x.name.includes(p) && /en[-_]US/i.test(x.lang)) || this.voices.find(x => x.name.includes(p)); if (v) break; } }
     this.voice = v || this.voices.find(x => /en[-_]US/i.test(x.lang)) || this.voices[0] || null; },
-  unlock(){ AudioOut.unlock(); Clips.unlock(); try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch(e){} },
-  cancel(){ this.token++; try { speechSynthesis.cancel(); } catch(e){} this.stopAudio(); setTalking(false); },
+  // Root cause of the "quiet start" on iPad: this used to speak a silent speechSynthesis utterance on every Start/Next tap
+  // (a trick to unlock the device voice). On iOS, any speech synthesis ducks the app's other audio, and the duck releases
+  // over about a second. So the first clip of every new screen played ducked and then got louder. The replay button
+  // didn't do this, which is why replays sounded right. Now the device voice is only touched when it's actually needed.
+  unlock(){ AudioOut.unlock(); Clips.unlock(); if (!Clips.on()) { if (!this._ttsUnlocked){ this._ttsUnlocked = true; try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch(e){} } } },
+  cancel(){ this.token++; try { if (speechSynthesis.speaking || speechSynthesis.pending) speechSynthesis.cancel(); } catch(e){} this.stopAudio(); setTalking(false); },
+  lastTTS: 0,
   stopAudio(){ AudioOut.stop(); if (this.audio){ try { this.audio.pause(); } catch(e){} if (this._fin) this._fin(); this.audio = null; } },
   // Speak text: a pre-made clip when there is one (slow clip for slow rates), else the device voice.
   async text(t, rate){ const k = Clips.key(t);
@@ -147,13 +169,14 @@ const Speech = {
       const u = new SpeechSynthesisUtterance(t); if (this.voice) u.voice = this.voice; u.lang = this.voice ? this.voice.lang : 'en-US';
       u.rate = rate || state.settings.rate; u.pitch = 1.05; let done = false; const fin = () => { if (!done){ done = true; clearTimeout(to); res(); } };
       this._u = u; // keep a reference: iOS can garbage-collect utterances and never fire onend
-      u.onend = fin; u.onerror = fin; const to = setTimeout(fin, 1800 + t.length * 110 / (u.rate || 1));
+      u.onend = () => { Speech.lastTTS = Date.now(); fin(); }; u.onerror = fin; const to = setTimeout(fin, 1800 + t.length * 110 / (u.rate || 1)); Speech.lastTTS = Date.now() + 60000;
       speechSynthesis.speak(u); }); },
   // Web Audio when possible (decoded buffer, steady level); the shared media element is only a fallback.
   async play(url){ if (MUTE || !url) return sleep(10);
     if (AudioOut.ensure()){ const my = this.token; if (!AudioOut.running()) AudioOut.unlock();
       const buf = await AudioOut.decode(url); if (my !== this.token) return;
-      if (buf && AudioOut.running()){ this.stopAudio(); return AudioOut.play(buf); } }
+      if (buf && AudioOut.running()){ const since = Date.now() - this.lastTTS; if (since < 900) await sleep(900 - Math.max(0, since)); // let an iOS speech duck release
+        if (my !== this.token) return; this.stopAudio(); return AudioOut.play(buf); } }
     return this.playEl(url); },
   playEl(url){ return new Promise(res => { const a = Clips.player(); this.stopAudio();
       this.audio = a; let done = false; const fin = () => { if (!done){ done = true; clearTimeout(to); a.onended = a.onerror = null; if (this._fin === fin) this._fin = null; res(); } };
@@ -355,6 +378,10 @@ function buildPlan(){
     steps.push({id:e.id, act: chooseAct(e.id, e.rep)}); last = [...last, e.id].slice(-2);
   }
   // 4. speaking practice: only for items she already knows receptively (>= 2 correct taps), mixed into the 2nd half
+  if (state.settings.speak !== 'off' && state.settings.speakFirst){ // parent/debug option: open with a speaking item
+    const known = avail.filter(id => 'LW'.includes(id[0]) && state.items[id] && state.items[id].c >= 1);
+    const id = known.length ? pick(known) : 'L:' + knownLetters(Math.max(1, L))[0];
+    steps.unshift({id, act:'sayRepeat', speak:true}); }
   if (state.settings.speak !== 'off'){
     const cands = avail.filter(id => 'LWH'.includes(id[0]) && state.items[id] && state.items[id].c >= 2)
       .map(id => [id, (state.spoken[id] ? state.spoken[id].a : 0) + Math.random() * 1.5 - (state.spoken[id] && state.spoken[id].chk && recentAccSp(state.spoken[id]) < .8 ? 1 : 0)])
@@ -373,7 +400,7 @@ async function startSession(){
   state.sessions.push({ id: SESSION.id, start: SESSION.start, end: SESSION.start, dur: 0, n: 0, c: 0, level: state.level, done: false, items: {} });
   if (state.sessions.length > 1000) state.sessions.shift();
   save();
-  renderPlay(); show('play');
+  renderPlay(); show('play'); dbgOverlay(); DBG.log('session start ' + BUILD + ' ctx=' + (AudioOut.ctx && AudioOut.ctx.state));
   if (Clips.on()){ // preload this session's audio: greeting first, then each step in order
     const first = [Clips.key(`Hi ${state.name}! Let's read.`)]; await Promise.race([Clips.preload(first), sleep(1500)]);
     const common = ['yes', 'listen', 'not quite listen', 'that word is', 'find', 'that is', 'that picture is', 'that says', 'there it is', 'starts with', 'that one says', 'we want'];
@@ -383,15 +410,18 @@ async function startSession(){
   for (SESSION.idx = 0; SESSION.idx < SESSION.steps.length; SESSION.idx++){
     const minutes = (Date.now() - SESSION.start) / 6e4;
     if (minutes >= state.settings.maxMin && SESSION.n >= 5) break;
-    const step = SESSION.steps[SESSION.idx]; drawDots();
-    const r = await Promise.race([Promise.resolve().then(() => runStep(step)).catch(e => { console.warn('step failed', e); return {}; }), SESSION.abortP]);
+    const step = SESSION.steps[SESSION.idx]; drawDots(); DBG.log(`step ${SESSION.idx} ${step.id} ${step.act}`);
+    // forceP lets a handler (e.g. the grown-up 👍) finish the step even if something inside the activity never resolves
+    const forceP = new Promise(res => { SESSION.force = v => { DBG.log('force-advance ' + step.id); res(v); }; });
+    const r = await Promise.race([Promise.resolve().then(() => runStep(step)).catch(e => { console.warn('step failed', e && (e.stack || e)); return {}; }), SESSION.abortP, forceP]);
+    SESSION.force = null; DBG.log('step done ' + JSON.stringify(r || {}).slice(0, 80));
     if (r && r.aborted) return endSession(true);
     if (r && r.scored){ recordAttempt(step.id, r.correct, step.act, r.help); SESSION.practiced.add(step.id);
       if (!r.correct && !SESSION.requeued[step.id]){ SESSION.requeued[step.id] = 1; const at = Math.min(SESSION.idx + 3, SESSION.steps.length);
         SESSION.steps.splice(at, 0, {id: step.id, act: step.act === 'build' ? 'readPicOrHear' : step.act}); } }
     if (r && r.spoken) try { recordSpoken(step.id, r.ok, step.act, r.heard); } catch(e){ console.warn(e); }
     if (r && r.teach){ state.intro[step.id] = Date.now(); save(); }
-    const nx = await Promise.race([waitNext(), SESSION.abortP]); if (nx && nx.aborted) return endSession(true);
+    let nx; try { nx = await Promise.race([waitNext(r && r.spoken ? 1500 : 0), SESSION.abortP]); } catch(e){ console.warn('next failed', e); nx = {}; } if (nx && nx.aborted) return endSession(true);
   }
   endSession(false);
 }
@@ -399,6 +429,9 @@ function runStep(step){ Speech.cancel(); setUni(null); $('#stage').innerHTML = '
   let act = step.act; if (act === 'readPicOrHear') act = (step.id[0]==='W' && WMAP[step.id.slice(2)].e) ? 'readPic' : 'hearPick';
   if (act === 'hearPick' && WORDS.filter(x => x.level <= state.level).length < 3) act = WMAP[step.id.slice(2)].e ? 'readPic' : 'build';
   step.shown = act; return ACTS[act](step); }
+function dbgOverlay(){ let o = document.getElementById('dbgOverlay');
+  if (state.settings.debugOverlay){ if (!o){ o = document.createElement('pre'); o.id = 'dbgOverlay'; document.body.appendChild(o); } o.textContent = DBG.list.slice(-8).join('\n'); }
+  else if (o) o.remove(); }
 function renderPlay(){
   $('#play').innerHTML = `<div class="topbar"><button class="homebtn" id="quit" aria-label="Stop">✕</button><div class="dots" id="dots"></div><div style="width:56px"></div></div>
    <div class="playmain"><div class="leftcol"><button class="speaker" id="replay" aria-label="Hear it again">${SPEAKER}</button></div>
@@ -412,7 +445,11 @@ function drawDots(){ const d = $('#dots'); if (!d) return; const n = SESSION.ste
 let PROMPT = null;
 function prompt(fn){ PROMPT = fn; return fn(); }
 function hideNext(){ const n = $('#next'); if (n) n.classList.remove('show'); }
-function waitNext(){ return new Promise(res => { const n = $('#next'); n.classList.add('show'); n.onclick = () => { n.onclick = null; Speech.unlock(); hideNext(); res({}); }; }); }
+// auto: after a grown-up check the step moves on by itself (the arrow still shows, for anyone who taps first)
+function waitNext(auto = 0){ return new Promise(res => { let n = $('#next'); if (!n){ renderPlay(); n = $('#next'); }
+  n.classList.add('show'); DBG.log('next arrow shown');
+  let done = false; const go = () => { if (done) return; done = true; n.onclick = n.onpointerup = null; try { Speech.unlock(); } catch(e){} hideNext(); res({}); };
+  n.onclick = go; n.onpointerup = go; if (auto) setTimeout(() => { if (!done) DBG.log('auto-advance'); go(); }, auto); }); }
 function confirmQuit(){
   const m = $('#modal'); m.innerHTML = `<div class="card gate"><div class="q" style="font-size:24px">Stop for today?</div>
    <div class="row" style="gap:20px"><button class="tile small" id="qy" aria-label="Yes, stop">✓</button><button class="tile small" id="qn" aria-label="No, keep going">↩</button></div></div>`;
@@ -525,7 +562,7 @@ const Mic = { stream:null, denied:false,
       mr.ondataavailable = e => e.data && e.data.size && chunks.push(e.data);
       mr.onstop = () => { this.release(); res(chunks.length ? URL.createObjectURL(new Blob(chunks, {type: mr.mimeType || 'audio/webm'})) : null); };
       mr.start(); setTimeout(() => mr.state !== 'inactive' && mr.stop(), ms); }); },
-  release(){ if (this.stream){ this.stream.getTracks().forEach(t => t.stop()); this.stream = null; } } // free the mic so iPad audio returns to the speaker
+  release(){ if (this.stream){ this.stream.getTracks().forEach(t => t.stop()); this.stream = null; AudioOut.afterMic(); } } // free the mic so iPad audio returns to the speaker
 };
 function asrListen(ms){ return new Promise(res => { const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR || !state.settings.asr || MUTE) return res(null);
@@ -559,7 +596,7 @@ async function speakFlow(step, mode){
       let url = null;
       if (!noMic && !Mic.denied){ const ms = k === 'L' ? 2000 : 2600; mic.classList.add('rec'); bar.style.setProperty('--ms', ms + 'ms'); bar.classList.remove('go'); void bar.offsetWidth; bar.classList.add('go');
         const asrP = (k !== 'L') ? asrListen(ms) : Promise.resolve(null);
-        url = await Mic.record(ms); mic.classList.remove('rec'); bar.classList.remove('go'); heard = await Promise.race([asrP, sleep(2500).then(() => null)]); }
+        DBG.log('mic record start'); url = await Mic.record(ms); DBG.log('mic record done ' + (url ? 'ok' : 'none') + ' ctx=' + (AudioOut.ctx && AudioOut.ctx.state)); mic.classList.remove('rec'); bar.classList.remove('go'); heard = await Promise.race([asrP, sleep(2500).then(() => null)]); }
       res(url); }; });
   while (true){
     const url = await attempt();
@@ -583,12 +620,16 @@ async function speakFlow(step, mode){
     strip.innerHTML = `<div class="lbl">Grown-up: did that sound right?${heard ? `<br><span class="asr">${match ? 'computer heard it ✓' : 'computer heard: “' + esc(heard[0] || '') + '”'}</span>` : ''}</div>
       <button class="yes" aria-label="Yes">👍</button><button class="again" aria-label="Try again">🔁</button>`;
     lower.appendChild(strip);
-    const verdict = await new Promise(res => { strip.querySelector('.yes').onclick = () => res(true); strip.querySelector('.again').onclick = () => res(false); });
+    const verdict = await new Promise(res => { let got = false; const pickV = v => () => { if (got) return; got = true; DBG.log('grown-up verdict ' + v); res(v); };
+      const y = strip.querySelector('.yes'), a = strip.querySelector('.again'); y.onclick = y.onpointerup = pickV(true); a.onclick = a.onpointerup = pickV(false); });
     if (firstOk === null) firstOk = verdict;
+    const result = ok => ({spoken:true, ok, heard: heard ? heard[0] : ''});
+    if (verdict || tries >= 2){ // whatever happens below, the step ends: tell the runner directly too
+      const r = result(verdict ? firstOk : false); const ses = SESSION; setTimeout(() => { if (ses && ses.force && ses.steps[ses.idx] === step) ses.force(r); }, 600); }
     // Don't wait for the audio to finish: on iPad, after the mic is used, 'ended' events can be late or never come.
       // The next arrow shows right away while "Yes!" plays (tapping it simply cuts the audio).
-      if (verdict){ setUni('nod'); if (tries === 1) sparkle(target); Speech.say(['Yes!']); await sleep(150); return {spoken:true, ok:firstOk, heard: heard ? heard[0] : ''}; }
-    if (tries >= 2){ Speech.say(["Good practice. We'll try it again another day."]); await sleep(150); return {spoken:true, ok:false, heard: heard ? heard[0] : ''}; }
+    if (verdict){ try { setUni('nod'); if (tries === 1) sparkle(target); Speech.say(['Yes!']).catch(() => {}); } catch(e){ console.warn('yes feedback', e); } return result(firstOk); }
+    if (tries >= 2){ try { Speech.say(["Good practice. We'll try it again another day."]).catch(() => {}); } catch(e){} return result(false); }
     // retry once: model again, then record again
     setUni('tilt'); lower.innerHTML = ''; lower.append(mic, bar); mic.disabled = true;
     await Speech.say(["Let's try again. Listen."]); await model(); await Speech.say(['Your turn. Tap the microphone.']);
@@ -764,6 +805,7 @@ function renderDash(){
       <div><button class="btn alt" id="sTest">Test voice</button></div>
       <label>Speaking practice (she says sounds/words into the mic)</label><select id="sSpeak"><option value="grownup" ${state.settings.speak==='grownup'?'selected':''}>On, a grown-up checks (👍 / 🔁)</option><option value="self" ${state.settings.speak==='self'?'selected':''}>On, self-check (counts as practice)</option><option value="off" ${state.settings.speak==='off'?'selected':''}>Off</option></select>
       <label>Speaking items per session</label><select id="sSpeakN">${[1,2,3,5].map(n => `<option ${n === state.settings.speakN ? 'selected' : ''}>${n}</option>`).join('')}</select>
+      <label><input type="checkbox" id="sSpeakFirst" ${state.settings.speakFirst ? 'checked' : ''}> Start each lesson with a speaking challenge (handy for trying it out)</label>
       <label><input type="checkbox" id="sAsr" ${state.settings.asr ? 'checked' : ''}> Show a speech-recognition hint for words (hint only, never marks wrong)</label>
       <label><input type="checkbox" id="sAnim" ${state.settings.anim ? 'checked' : ''}> Short unicorn animation after a correct answer</label>
       <label>Level (move if ${esc(state.name)} already knows letters, or needs a step back)</label><select id="sLevel">${levelOpts}</select>
@@ -771,6 +813,12 @@ function renderDash(){
     <div class="panel"><h3>Record letter sounds (recommended)</h3>
       <div class="note">The unicorn voice's letter sounds were cut from real words, and a few (h, v, g, z and the "bouncy" stops) are only close. You can record yourself for any sound. Say it short and clean, like /m/, not "em" or "muh". Each recording is about 1.5 seconds and replaces the unicorn voice for that sound. Recordings stay on this device and are not in the export.</div>
       <div class="reclist" id="reclist" style="margin-top:10px"></div></div>
+    <div class="panel"><h3>Debug log</h3>
+      <div class="note">If something gets stuck, open this and send a photo or copy of the last lines.</div>
+      <label><input type="checkbox" id="sDbgOv" ${state.settings.debugOverlay ? 'checked' : ''}> Show the last log lines on screen during lessons (then tap Save settings)</label>
+      <pre class="dbglog" id="dbgList">${esc(DBG.list.slice(-60).reverse().join('\n') || '(empty)')}</pre>
+      <button class="btn alt" id="dbgCopy">Copy log</button> <button class="btn alt" id="dbgClear">Clear log</button>
+      <div class="note">${esc(navigator.userAgent)}</div></div>
     <div class="panel"><h3>Backup &amp; devices</h3>
       <div class="note">Progress is saved in this browser only. Use Export/Import to move it to another device or browser.</div>
       <button class="btn" id="exp">Export progress (.json)</button><label class="btn alt" style="display:inline-block;cursor:pointer">Import…<input type="file" id="imp" accept=".json,application/json" style="display:none"></label>
@@ -781,10 +829,12 @@ function renderDash(){
   show('dash');
   $('#dclose').onclick = () => { Speech.cancel(); renderHome(); };
   $('#sRate').oninput = e => $('#rv').textContent = e.target.value;
+  $('#dbgCopy').onclick = () => { const t = `Anya Reads ${BUILD}\n${navigator.userAgent}\n` + DBG.list.join('\n'); (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => $('#dbgCopy').textContent = 'Copied ✓').catch(() => { const r = document.createRange(); r.selectNodeContents($('#dbgList')); getSelection().removeAllRanges(); getSelection().addRange(r); }); };
+  $('#dbgClear').onclick = () => { DBG.list = []; try { localStorage.removeItem(DBG.key); } catch(e){} $('#dbgList').textContent = '(empty)'; };
   $('#sTest').onclick = () => { Speech.unlock(); state.settings.clips = $('#sClips').checked; state.settings.voice = $('#sVoice').value; state.settings.rate = +$('#sRate').value; state.settings.soundMode = $('#sMode').value; Speech.choose(); Speech.say(['Tap the letter that says', ...sound('m'), {pause:300}, 'Let\'s blend. ', pureSound('s'), pureSound('a'), pureSound('t'), {t:'sat', rate:0.5}, 'sat']); };
   $('#sSave').onclick = () => { state.name = $('#sName').value.trim() || 'Anya'; state.settings.items = +$('#sItems').value; state.settings.maxMin = +$('#sMin').value;
     state.settings.voice = $('#sVoice').value; state.settings.rate = +$('#sRate').value; state.settings.soundMode = $('#sMode').value; Speech.choose();
-    state.settings.clips = $('#sClips').checked; state.settings.speak = $('#sSpeak').value; state.settings.speakN = +$('#sSpeakN').value; state.settings.asr = $('#sAsr').checked; state.settings.anim = $('#sAnim').checked;
+    state.settings.clips = $('#sClips').checked; state.settings.speakFirst = $('#sSpeakFirst').checked; state.settings.debugOverlay = $('#sDbgOv').checked; state.settings.speak = $('#sSpeak').value; state.settings.speakN = +$('#sSpeakN').value; state.settings.asr = $('#sAsr').checked; state.settings.anim = $('#sAnim').checked;
     const nl = +$('#sLevel').value; if (nl !== state.level){ state.level = nl; for (let i = 0; i < nl - 1; i++) state.intro['L:'+LETTERS[i].id] = state.intro['L:'+LETTERS[i].id] || Date.now(); }
     save(); renderDash(); setTimeout(() => { const s = $('#saved'); if (s) s.textContent = 'Saved ✓'; }, 0); };
   $('#exp').onclick = () => { const blob = new Blob([JSON.stringify(state, null, 1)], {type:'application/json'}); const a = document.createElement('a');

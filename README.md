@@ -33,6 +33,14 @@ Priority: **a parent recording** (letter sounds, Grown-ups → Record) comes fir
 
 **Updates and caching:** the page and the audio manifest are network-first, so opening the app online always gets the newest version. Cached copies are used offline only. Audio files are immutable (content-hashed) and cache-first. Each build gets its own page cache, and old ones are deleted on activation.
 
+**iPad quiet-start fix:** the app no longer calls the device voice (speechSynthesis) when recorded clips are available. On iOS, any speech synthesis, even a silent "unlock" utterance, ducks the app's other audio for about a second. Clips that play after a long pause also start with 300 ms of silence, and a sub-audible 20 Hz signal at -60 dBFS keeps the output awake.
+
+## Grown-up debug tools
+- *Settings → Start each lesson with a speaking challenge*: the first item is a speaking item, for trying out the mic flow.
+- *Debug log* panel: the last 150 events and errors (steps, mic, grown-up checks, arrow shown, auto-advance), with Copy and Clear. An optional checkbox shows the last lines on screen during lessons.
+- After a grown-up 👍/🔁 ends a speaking item, the next arrow appears at once and the lesson moves on by itself after 1.5 s.
+- Tests: `src/test_e2e.py` (Chrome, muted), `src/test_audio.py all` (Chrome, sound on, offline, updates, speaking advance), and `src/test_webkit.py` (WebKit / Safari engine, emulated iPads, speaking flow with a mock mic and real taps).
+
 ## Known limitations
 - **A few letter sounds are only approximate** (see Audio). Under Grown-ups → *Record letter sounds*, you can record any sound once (about 1.5 s). Recordings replace the clip everywhere, including in blending. They are stored on the device in IndexedDB and are **not** in the JSON export. Recording needs https or localhost.
 - If clips can't load (first visit while offline), the device voice is used, and its letter sounds are poor.
