@@ -22,6 +22,15 @@ async def play_session(page, wrong_rate=0.15, shot_acts=None, max_steps=80):
         if shot_acts is not None and act in shot_acts and act not in shot_acts['done']:
             await page.wait_for_timeout(300)
             await page.screenshot(path=SHOTS + shot_acts[act]); shot_acts['done'].add(act)
+        if act in ('sayRepeat', 'readAloud'):
+            await page.wait_for_selector('#stage .mic:not([disabled])', timeout=40000)
+            await page.click('#stage .mic')
+            if shot_acts is not None and 'speak' in shot_acts and 'speak' not in shot_acts['done']:
+                await page.wait_for_selector('#stage .gstrip', timeout=40000); await page.screenshot(path=SHOTS + shot_acts['speak']); shot_acts['done'].add('speak')
+            await page.wait_for_selector('#stage .gstrip .yes', timeout=40000)
+            await page.click('#stage .gstrip .yes')
+            await page.wait_for_selector('#next.show', timeout=30000)
+            continue
         if act == 'build':
             word = st['id'][2:]
             gs = await page.evaluate(f"graphemes({json.dumps(word)})")
@@ -34,7 +43,7 @@ async def play_session(page, wrong_rate=0.15, shot_acts=None, max_steps=80):
             for g in gs:
                 await page.click(f"#stage .row .tile:not(.used):text-is('{g}')")
                 await page.wait_for_timeout(40)
-            await page.wait_for_selector('#next.show', timeout=8000)
+            await page.wait_for_selector('#next.show', timeout=30000)
             continue
         oks = await page.query_selector_all('#stage .tile[data-ok="1"]')
         if oks:
@@ -43,18 +52,18 @@ async def play_session(page, wrong_rate=0.15, shot_acts=None, max_steps=80):
                 if bad:
                     await bad[0].click(); await page.wait_for_timeout(80)
             await oks[0].click()
-            await page.wait_for_selector('#next.show', timeout=8000)
+            await page.wait_for_selector('#next.show', timeout=30000)
             continue
         # teach steps: wait for arrow
         try:
-            await page.wait_for_selector('#next.show', timeout=10000)
+            await page.wait_for_selector('#next.show', timeout=45000)
         except Exception:
             print('STUCK', st, errors[-5:], (await page.inner_html('#stage'))[:600]); raise
     raise RuntimeError('session did not finish')
 
 async def main():
     async with async_playwright() as p:
-        b = await p.chromium.launch(executable_path='/usr/bin/google-chrome', args=['--autoplay-policy=no-user-gesture-required'])
+        b = await p.chromium.launch(executable_path='/usr/bin/google-chrome', args=['--autoplay-policy=no-user-gesture-required','--use-fake-ui-for-media-stream','--use-fake-device-for-media-stream'])
         ctx = await b.new_context(viewport={'width':1180,'height':820}, device_scale_factor=1, has_touch=True)
         page = await ctx.new_page()
         page.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
@@ -86,12 +95,21 @@ async def main():
         await page.evaluate("""(()=>{const s=__anya.state; s.level=16; for(const l of LETTERS.slice(0,15)) s.intro['L:'+l.id]=s.intro['L:'+l.id]||Date.now();
           for(const h of HEARTS.filter(h=>h[1]<=16)) s.intro['H:'+h[0].toLowerCase()]=Date.now();
           for(const w of __anya.WORDS.filter(w=>w.level<=15)) s.intro['W:'+w.w]=Date.now(); save();})()""")
-        shots = {'readPic':'03-read-word-pick-picture.png','sentence':'04-read-sentence.png','build':'03b-build-word.png','hearTap':'02b-hear-sound-tap-letter.png','done':set()}
+        shots = {'speak':'08-speaking-practice.png','readPic':'03-read-word-pick-picture.png','sentence':'04-read-sentence.png','build':'03b-build-word.png','hearTap':'02b-hear-sound-tap-letter.png','done':set()}
         for i in range(6):
             seen |= await play_session(page, wrong_rate=0.2, shot_acts=shots)
             await page.click('#fh'); await page.wait_for_selector('#home.on')
-            if len(shots['done']) >= 4: break
+            if len(shots['done']) >= 5: break
         print('shots taken', shots['done'])
+        # celebration frames
+        await page.click('#startBtn'); await page.wait_for_timeout(300)
+        for kind, t in (('dash', 750), ('bloom', 500), ('trailspark', 800)):
+            await page.evaluate(f"__anya.celebrate('{kind}')"); await page.wait_for_timeout(t)
+            await page.screenshot(path=SHOTS + f'09-celebrate-{kind}.png'); await page.wait_for_timeout(1200)
+        await page.evaluate("SESSION.abort({aborted:true})"); await page.wait_for_timeout(300)
+        if await page.is_visible('#finish.on'): await page.click('#fh')
+        await page.wait_for_selector('#home.on')
+        sp = await page.evaluate("Object.keys(__anya.state.spoken).length"); print('spoken items tracked:', sp)
         # dashboard via gate
         await page.click('#gu')
         q = await page.text_content('.gate .q'); a, bb = [int(x) for x in q.split('=')[0].split('+')]
@@ -120,4 +138,4 @@ async def main():
         await b.close()
     print('CONSOLE ERRORS:', errors if errors else 'none')
 
-asyncio.run(main())
+if __name__ == '__main__': asyncio.run(main())
