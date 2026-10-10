@@ -1,10 +1,10 @@
-// Anya Reads service worker. Build 20261009-2159.
+// Anya Reads service worker. Build 20261009-2238.
 // - The page (index.html) and audio/jenny/manifest.json are network-first, so a new version reaches the iPad
 //   the next time the app is opened online. The cached copy is only used offline.
 // - Audio clips have content hashes in their file names, so they're cached forever (cache-first) and
 //   entries no longer in the manifest are pruned.
 // - Old page caches are deleted when a new build activates.
-const BUILD = '20261009-2159';
+const BUILD = '20261009-2238';
 const STATIC = 'anya-static-' + BUILD;
 const AUDIO = 'anya-audio-v1';
 const MANIFEST = 'audio/jenny/manifest.json';

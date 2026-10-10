@@ -73,7 +73,9 @@ async def main():
         await page.screenshot(path=SHOTS + '01-home.png')
         # session 1
         seen = await play_session(page, shot_acts={'meet':'02-meet-letter.png','done':set()})
-        await page.wait_for_timeout(2500)
+        await page.wait_for_timeout(1500); await page.screenshot(path=SHOTS + '09-finish-celebration-gallop.png')
+        await page.wait_for_timeout(1700); await page.screenshot(path=SHOTS + '09-finish-celebration-bloom.png')
+        await page.wait_for_timeout(1500)
         await page.screenshot(path=SHOTS + '05-finish.png')
         s1 = await page.evaluate("JSON.parse(localStorage.getItem('anyaReads.v1'))")
         print('session1 acts', seen, 'sessions', len(s1['sessions']), 'items', list(s1['items'].keys()), 'rainbow', s1['rainbow'])
@@ -101,11 +103,7 @@ async def main():
             await page.click('#fh'); await page.wait_for_selector('#home.on')
             if len(shots['done']) >= 5: break
         print('shots taken', shots['done'])
-        # celebration frames
         await page.click('#startBtn'); await page.wait_for_timeout(300)
-        for kind, t in (('dash', 750), ('bloom', 500), ('trailspark', 800)):
-            await page.evaluate(f"__anya.celebrate('{kind}')"); await page.wait_for_timeout(t)
-            await page.screenshot(path=SHOTS + f'09-celebrate-{kind}.png'); await page.wait_for_timeout(1200)
         await page.evaluate("SESSION.abort({aborted:true})"); await page.wait_for_timeout(300)
         if await page.is_visible('#finish.on'): await page.click('#fh')
         await page.wait_for_selector('#home.on')

@@ -86,8 +86,8 @@ button{font-family:inherit;color:inherit;border:0;cursor:pointer;touch-action:ma
 .sentence .w{font-size:min(10vmin,84px);font-weight:700;padding:0 .6vmin;border-radius:14px}
 .sentence .w.lit{background:var(--butter)}
 .sparkle{position:absolute;pointer-events:none;inset:-20px}
-.sparkle span{position:absolute;font-size:28px;color:#f3c34f;animation:spk .9s ease-out forwards}
-@keyframes spk{0%{opacity:0;transform:scale(.3)}40%{opacity:1}100%{opacity:0;transform:scale(1.1) translateY(-10px)}}
+.sparkle span{position:absolute;font-size:18px;color:#f3c34f;opacity:0;animation:spk .5s ease-out forwards}
+@keyframes spk{0%{opacity:0;transform:scale(.4)}35%{opacity:.95}100%{opacity:0;transform:scale(1) translateY(-6px)}}
 .uni .head{transform-origin:120px 95px;transition:transform .5s ease}
 .uni.nod .head{transform:rotate(8deg)}
 .uni.tilt .head{transform:rotate(-10deg)}
@@ -185,6 +185,15 @@ body.celebrating .uni-corner{opacity:0;transition:opacity .2s}
 .gstrip button.yes{background:var(--mint)}
 .asr{font-size:15px;color:var(--muted);min-height:20px}
 .sentence.lit-all .w{background:#fff3c4}
+
+/* end-of-lesson celebration on the rainbow */
+#finish #rbUni{transition:none}
+.rb-spark{font-size:22px;fill:#f3c34f;opacity:0;animation:rbspark 1.3s ease-out forwards;transform-box:fill-box;transform-origin:center}
+@keyframes rbspark{0%{opacity:0;transform:scale(.3)}25%{opacity:1}100%{opacity:0;transform:scale(1.1) translateY(-12px)}}
+.rb-bloom{font-size:26px;fill:#f0b93a;opacity:0;animation:rbbloom 1.5s ease-out forwards;transform-box:fill-box;transform-origin:center}
+@keyframes rbbloom{0%{opacity:0;transform:translate(0,-10px) scale(.3)}30%{opacity:1}100%{opacity:0;transform:translate(var(--dx),calc(var(--dy) - 10px)) scale(1)}}
+.rb-pop{animation:rbpop .8s ease-out;transform-box:fill-box;transform-origin:center}
+@keyframes rbpop{0%{transform:scale(1)}40%{transform:scale(1.9);fill:#f3c34f}100%{transform:scale(1)}}
 
 </style></head>
 <body>
@@ -342,7 +351,7 @@ function levelCheck(L){ // is level L done -> can advance?
 // ===================== SPEECH =====================
 // Pre-recorded natural voice (Jenny) -----------------------------------
 // Priority everywhere: parent recording > pre-made clip > device speechSynthesis.
-const BUILD = '20261009-2159';
+const BUILD = '20261009-2238';
 const SILENT = 'data:audio/mpeg;base64,SUQzBAAAAAAAIlRTU0UAAAAOAAADTGF2ZjYxLjcuMTAzAAAAAAAAAAAAAAD/84TAAAAAAAAAAAAASW5mbwAAAA8AAAAFAAACoABtbW1tbW1tbW1tbW1tbW1tbW1tkpKSkpKSkpKSkpKSkpKSkpKSkpK2tra2tra2tra2tra2tra2tra2ttvb29vb29vb29vb29vb29vb29vb//////////////////////////8AAAAATGF2YzYxLjE5AAAAAAAAAAAAAAAAJARQAAAAAAAAAqC9P8vrAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/80TEAAAAA0gAAAAATEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVMQU1FMy7/80TEUwAAA0gAAAAAMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVMQU1FMy7/80TEpgAAA0gAAAAAMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVX/80TErAAAA0gAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVX/80TErAAAA0gAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU=';
 const Clips = { man:null, base:'audio/jenny/', urls:{}, pending:{}, el:null, ok:false,
   async init(){ try { const r = await fetch(this.base + 'manifest.json', {cache:'no-cache'}); if (r.ok){ this.man = await r.json(); this.ok = true; } } catch(e){} },
@@ -352,11 +361,41 @@ const Clips = { man:null, base:'audio/jenny/', urls:{}, pending:{}, el:null, ok:
   load(k){ if (!this.has(k)) return Promise.resolve(null); if (this.urls[k]) return Promise.resolve(this.urls[k]);
     return this.pending[k] || (this.pending[k] = fetch(this.base + this.man.clips[k]).then(r => r.ok ? r.blob() : null)
       .then(b => b ? (this.urls[k] = URL.createObjectURL(b)) : null).catch(() => null).finally(() => { delete this.pending[k]; })); },
-  async preload(keys){ keys = [...new Set(keys)].filter(k => this.has(k) && !this.urls[k]); let i = 0;
-    const worker = async () => { while (i < keys.length) await this.load(keys[i++]); }; await Promise.all([1,2,3,4,5,6].map(worker)); },
+  async preload(keys){ keys = [...new Set(keys)].filter(k => this.has(k) && !(this.urls[k] && AudioOut.bufs[this.urls[k]])); let i = 0;
+    const worker = async () => { while (i < keys.length){ const u = await this.load(keys[i++]); if (u) await AudioOut.decode(u); } }; await Promise.all([1,2,3,4,5,6].map(worker)); },
   // One shared <audio> element, unlocked by a tap: iOS then lets it play later without a new gesture, and it ignores the mute switch like any media.
   player(){ if (!this.el){ this.el = new Audio(); this.el.preload = 'auto'; this.el.setAttribute('playsinline', ''); } return this.el; },
   unlock(){ const a = this.player(); if (this.unlocked) return; this.unlocked = true; try { a.src = SILENT; a.volume = 1; const p = a.play(); if (p) p.catch(() => { this.unlocked = false; }); } catch(e){} },
+};
+// All clips play through ONE Web Audio context that never goes idle. On iPad, the old way (a media element
+// that went silent between clips) let iOS power the audio output down. Each new clip then started while the output
+// was ramping back up, so the first words of every screen were quiet. A continuous, inaudible keep-alive signal
+// (about -86 dBFS) keeps the output awake, so every clip starts at full level.
+const SILENT_LOOP = 'data:audio/mpeg;base64,SUQzBAAAAAAAIlRTU0UAAAAOAAADTGF2ZjYxLjcuMTAzAAAAAAAAAAAAAAD/83DAAAAAAAAAAAAASW5mbwAAAA8AAAApAAAJFAAZGR8fJSUlKyswMDA2Njw8PEJCR0dNTU1TU1lZWV5eZGRkampwcHB1dXt7gYGBh4eMjIySkpiYmJ6eo6Opqamvr7W1tbq6wMDAxsbMzMzR0dfX3d3d4+Po6Oju7vT09Pr6//8AAAAATGF2YzYxLjE5AAAAAAAAAAAAAAAAJAPeAAAAAAAACRSa85HjAAAAAAAAAAAAAAAAAP/zIMQAAAADSAAAAABMQU1FMy4xMDBVVVVVVVVVVVVVVUxBTUUzLjEwMFVVVVVVVVVVVVX/8yLEJwAAA0gAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVVVMQU1FMy4xMDBVVVVVVVVVVVVVVf/zIMRPAAADSAAAAABVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMuMTAwVVVVVVVVVVVVVVX/8yDEdgAAA0gAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVVVMQU1FMy4xMDBVVVVVVVVVVVVV//MgxJ0AAANIAAAAAFVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMuMTAwVVVVVVVVVVVVVf/zIsTEAAADSAAAAABVVVVVVVVVVVVVVVVVVVVVVVVVVUxBTUUzLjEwMFVVVVVVVVVVVVVV//MgxNgAAANIAAAAAFVVVVVVVVVVVVVVVVVVVVVVVVVMQU1FMy4xMDBVVVVVVVVVVVVVVf/zIMTYAAADSAAAAABVVVVVVVVVVVVVVVVVVVVVVVVVVUxBTUUzLjEwMFVVVVVVVVVVVVX/8yDE2AAAA0gAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVVVMQU1FMy4xMDBVVVVVVVVVVVVV//MixNcAAANIAAAAAFVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMuMTAwVVVVVVVVVVVVVVX/8yDE2AAAA0gAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVUxBTUUzLjEwMFVVVVVVVVVVVVVV//MgxNgAAANIAAAAAFVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMuMTAwVVVVVVVVVVVVVf/zIMTYAAADSAAAAABVVVVVVVVVVVVVVVVVVVVVVVVVVUxBTUUzLjEwMFVVVVVVVVVVVVX/8yLE1wAAA0gAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVVVMQU1FMy4xMDBVVVVVVVVVVVVVVf/zIMTYAAADSAAAAABVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMuMTAwVVVVVVVVVVVVVVX/8yDE2AAAA0gAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVVVMQU1FMy4xMDBVVVVVVVVVVVVV//MgxNgAAANIAAAAAFVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMuMTAwVVVVVVVVVVVVVf/zIsTXAAADSAAAAABVVVVVVVVVVVVVVVVVVVVVVVVVVUxBTUUzLjEwMFVVVVVVVVVVVVVV//MgxNgAAANIAAAAAFVVVVVVVVVVVVVVVVVVVVVVVVVMQU1FMy4xMDBVVVVVVVVVVVVVVf/zIMTYAAADSAAAAABVVVVVVVVVVVVVVVVVVVVVVVVVVUxBTUUzLjEwMFVVVVVVVVVVVVX/8yDE2AAAA0gAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVVVMQU1FMy4xMDBVVVVVVVVVVVVV//MixNcAAANIAAAAAFVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMuMTAwVVVVVVVVVVVVVVX/8yDE2AAAA0gAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVUxBTUUzLjEwMFVVVVVVVVVVVVVV//MgxNgAAANIAAAAAFVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMuMTAwVVVVVVVVVVVVVf/zIMTYAAADSAAAAABVVVVVVVVVVVVVVVVVVVVVVVVVVUxBTUUzLjEwMFVVVVVVVVVVVVX/8yLE1wAAA0gAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVVVMQU1FMy4xMDBVVVVVVVVVVVVVVf/zIMTYAAADSAAAAABVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMuMTAwVVVVVVVVVVVVVVX/8yDE2AAAA0gAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVVVMQU1FMy4xMDBVVVVVVVVVVVVV//MgxNgAAANIAAAAAFVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMuMTAwVVVVVVVVVVVVVf/zIsTXAAADSAAAAABVVVVVVVVVVVVVVVVVVVVVVVVVVUxBTUUzLjEwMFVVVVVVVVVVVVVV//MgxNgAAANIAAAAAFVVVVVVVVVVVVVVVVVVVVVVVVVMQU1FMy4xMDBVVVVVVVVVVVVVVf/zIMTYAAADSAAAAABVVVVVVVVVVVVVVVVVVVVVVVVVVUxBTUUzLjEwMFVVVVVVVVVVVVX/8yDE2AAAA0gAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVVVMQU1FMy4xMDBVVVVVVVVVVVVV//MixNcAAANIAAAAAFVVVVVVVVVVVVVVVVVVVVVVVVVVTEFNRTMuMTAwVVVVVVVVVVVVVVX/8yDE2AAAA0gAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVUxBTUUzLjEwMFVVVVVVVVVVVVVV//MgxNgAAANIAAAAAFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVf/zIMTYAAADSAAAAABVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVX/8yLE1wAAA0gAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVf/zIMTYAAADSAAAAABVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVX/8yDE2AAAA0gAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//MgxNgAAANIAAAAAFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVQ==';
+const AudioOut = { ctx:null, bufs:{}, pend:{}, cur:null, loopEl:null,
+  ensure(){ if (this.ctx) return this.ctx; const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return null;
+    try { this.ctx = new AC({latencyHint:'interactive'}); } catch(e){ try { this.ctx = new AC(); } catch(e2){ return null; } }
+    const c = this.ctx, n = c.sampleRate, b = c.createBuffer(1, n, n), d = b.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * 5e-5;
+    const src = c.createBufferSource(); src.buffer = b; src.loop = true; src.connect(c.destination); src.start(0);
+    document.addEventListener('visibilitychange', () => { if (!this.ctx) return; if (document.hidden) this.ctx.suspend().catch(() => {}); else this.ctx.resume().catch(() => {}); });
+    return c; },
+  // Called on every tap. Resumes the context and, on iOS, asks for "playback" audio so the mute switch doesn't silence it.
+  unlock(){ const c = this.ensure(); if (!c) return;
+    try { if (navigator.audioSession && navigator.audioSession.type !== 'playback') navigator.audioSession.type = 'playback'; } catch(e){}
+    if (c.state !== 'running') c.resume().catch(() => {});
+    if (!navigator.audioSession && /iP(ad|hone|od)|Macintosh/.test(navigator.userAgent) && 'ontouchend' in document && !this.loopEl){
+      // older iOS: a looping silent media element makes Web Audio play even with the mute switch on
+      const a = new Audio(SILENT_LOOP); a.loop = true; a.setAttribute('playsinline', ''); a.volume = 0.01; this.loopEl = a; a.play().catch(() => { this.loopEl = null; }); } },
+  running(){ return this.ctx && this.ctx.state === 'running'; },
+  decode(url){ if (this.bufs[url]) return Promise.resolve(this.bufs[url]); const c = this.ensure(); if (!c) return Promise.resolve(null);
+    return this.pend[url] || (this.pend[url] = fetch(url).then(r => r.arrayBuffer())
+      .then(ab => new Promise(res => { try { const p = c.decodeAudioData(ab, res, () => res(null)); if (p && p.catch) p.catch(() => res(null)); } catch(e){ res(null); } }))
+      .then(buf => { if (buf) this.bufs[url] = buf; delete this.pend[url]; return buf; }).catch(() => { delete this.pend[url]; return null; })); },
+  play(buf){ return new Promise(res => { const c = this.ctx; const src = c.createBufferSource(); src.buffer = buf; src.connect(c.destination);
+      let done = false; const fin = () => { if (!done){ done = true; clearTimeout(to); if (this.cur && this.cur.src === src) this.cur = null; res(); } };
+      src.onended = fin; const to = setTimeout(fin, buf.duration * 1000 + 1500); this.cur = {src, fin}; src.start(c.currentTime + 0.005); }); },
+  stop(){ if (this.cur){ const {src, fin} = this.cur; this.cur = null; try { src.onended = null; src.stop(); } catch(e){} fin(); } },
 };
 window.__ttsFallback = [];
 const Speech = {
@@ -367,9 +406,9 @@ const Speech = {
     if (!v){ const pref = ['Samantha','Ava','Allison','Susan','Zoe','Nicky','Google US English','Aria','Jenny','Ana','Karen','Moira','Serena','Tessa'];
       for (const p of pref){ v = this.voices.find(x => x.name.includes(p) && /en[-_]US/i.test(x.lang)) || this.voices.find(x => x.name.includes(p)); if (v) break; } }
     this.voice = v || this.voices.find(x => /en[-_]US/i.test(x.lang)) || this.voices[0] || null; },
-  unlock(){ Clips.unlock(); try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch(e){} },
+  unlock(){ AudioOut.unlock(); Clips.unlock(); try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch(e){} },
   cancel(){ this.token++; try { speechSynthesis.cancel(); } catch(e){} this.stopAudio(); setTalking(false); },
-  stopAudio(){ if (this.audio){ try { this.audio.pause(); } catch(e){} if (this._fin) this._fin(); this.audio = null; } },
+  stopAudio(){ AudioOut.stop(); if (this.audio){ try { this.audio.pause(); } catch(e){} if (this._fin) this._fin(); this.audio = null; } },
   // Speak text: a pre-made clip when there is one (slow clip for slow rates), else the device voice.
   async text(t, rate){ const k = Clips.key(t);
     if (!MUTE && Clips.on()){ const url = (rate && rate <= 0.6 && await Clips.load('slow:' + k)) || await Clips.load(k);
@@ -382,7 +421,13 @@ const Speech = {
       this._u = u; // keep a reference: iOS can garbage-collect utterances and never fire onend
       u.onend = fin; u.onerror = fin; const to = setTimeout(fin, 1800 + t.length * 110 / (u.rate || 1));
       speechSynthesis.speak(u); }); },
-  play(url){ return new Promise(res => { if (MUTE || !url) return setTimeout(res, 10); const a = Clips.player(); this.stopAudio();
+  // Web Audio when possible (decoded buffer, steady level); the shared media element is only a fallback.
+  async play(url){ if (MUTE || !url) return sleep(10);
+    if (AudioOut.ensure()){ const my = this.token; if (!AudioOut.running()) AudioOut.unlock();
+      const buf = await AudioOut.decode(url); if (my !== this.token) return;
+      if (buf && AudioOut.running()){ this.stopAudio(); return AudioOut.play(buf); } }
+    return this.playEl(url); },
+  playEl(url){ return new Promise(res => { const a = Clips.player(); this.stopAudio();
       this.audio = a; let done = false; const fin = () => { if (!done){ done = true; clearTimeout(to); a.onended = a.onerror = null; if (this._fin === fin) this._fin = null; res(); } };
       this._fin = fin; a.onended = fin; a.onerror = fin; let to = setTimeout(fin, 8000);
       a.onloadedmetadata = () => { if (isFinite(a.duration)){ clearTimeout(to); to = setTimeout(fin, a.duration * 1000 + 1500); } };
@@ -395,11 +440,12 @@ const Speech = {
     try { if (!MUTE && (speechSynthesis.speaking || speechSynthesis.pending)){ speechSynthesis.cancel(); await new Promise(r => setTimeout(r, 60)); } } catch(e){} // Safari drops speak() right after cancel()
     this.stopAudio();
     for (const p of [].concat(parts)){ if (my !== this.token) return;
-      if (typeof p === 'string') await this.text(p);
+      const cap = ms => pr => Promise.race([pr, sleep(ms)]); // safety net if an audio end event never fires
+      if (typeof p === 'string') await cap(2500 + p.length * 120)(this.text(p));
       else if (p.pause) await sleep(p.pause);
-      else if (p.rec) await this.play(this.recs[p.rec]);
-      else if (p.ph) await this.phon(p.ph);
-      else if (p.t) await this.text(p.t, p.rate); }
+      else if (p.rec) await cap(5000)(this.play(this.recs[p.rec]));
+      else if (p.ph) await cap(3000)(this.phon(p.ph));
+      else if (p.t) await cap(2500 + p.t.length * 200)(this.text(p.t, p.rate)); }
     if (my === this.token) setTalking(false); }
 };
 function setTalking(on){ document.querySelectorAll('.speaker').forEach(b => b.classList.toggle('talking', on)); }
@@ -462,6 +508,35 @@ const SPEAKER = `<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z" fill="
 const ARROW = `<svg viewBox="0 0 24 24"><path d="M5 12h12M12 6l6 6-6 6" stroke="#fff" stroke-width="3.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const PLAYICON = `<svg viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z" fill="#3b3352" stroke="#3b3352" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
 
+// End-of-lesson celebration (about 4 s): the unicorn gallops along the rainbow arc to her new step in three
+// bouncy strides, leaving sparkles, then twirls, and stars bloom around her. Calm, with no points.
+// With reduced motion, or animations off, the unicorn just appears on the new step.
+function finishCelebration(fromSteps, toSteps, per = 20){
+  const u = document.querySelector('#finish #rbUni'); if (!u) return;
+  const svg = u.ownerSVGElement, cx = 300, cy = 250, R = 236;
+  const at = k => { const t = Math.PI - (k / (per - 1)) * Math.PI; return [cx + R * Math.cos(t), cy - R * Math.sin(t)]; };
+  const k1 = toSteps % per; const a0 = Math.max(-1, k1 - 4); // a short run-up along the steps she's walked, so the gallop is visible even for one step
+  const place = (x, y, rot = 0, sc = 1) => { u.setAttribute('x', x); u.setAttribute('y', y + 12); u.setAttribute('transform', `rotate(${rot} ${x} ${y}) translate(${x} ${y}) scale(${sc}) translate(${-x} ${-y})`); };
+  const dot = svg.querySelectorAll('circle')[(k1 + per - 1) % per];
+  if (!motionOK()){ const [x, y] = at(k1); place(x, y); return; }
+  const mk = (x, y, cls, txt = '✦', extra = '') => { const e = document.createElementNS('http://www.w3.org/2000/svg', 'text'); e.setAttribute('x', x); e.setAttribute('y', y);
+    e.setAttribute('text-anchor', 'middle'); e.setAttribute('class', cls); e.textContent = txt; if (extra) e.setAttribute('style', extra); svg.appendChild(e); return e; };
+  const span = Math.max(1, k1 - a0), GALLOP = 2400, TWIRL = 900, strides = 3; let t0 = null, lastStride = -1;
+  place(...at(a0), 0, 1);
+  const frame = t => { if (!document.body.contains(u)) return; if (t0 === null) t0 = t; const e = t - t0;
+    if (e < GALLOP){ const p = e / GALLOP, ease = p < .5 ? 2*p*p : 1 - Math.pow(-2*p + 2, 2) / 2; const k = a0 + span * ease; const [x, y] = at(k);
+      const stride = Math.floor(p * strides), sp = (p * strides) % 1; const hop = Math.sin(sp * Math.PI) * 26;
+      place(x, y - hop, Math.sin(sp * Math.PI * 2) * -8, 1.35);
+      if (stride !== lastStride){ lastStride = stride; const s = mk(x, y + 18, 'rb-spark'); setTimeout(() => s.remove(), 1400); }
+      requestAnimationFrame(frame); return; }
+    const [x, y] = at(k1);
+    if (e < GALLOP + TWIRL){ const p = (e - GALLOP) / TWIRL; place(x, y - Math.sin(p * Math.PI) * 10, p * 360, 1.35 - .15 * p); requestAnimationFrame(frame); return; }
+    place(x, y, 0, 1.2);
+    if (dot) dot.classList.add('rb-pop');
+    for (let i = 0; i < 10; i++){ const ang = i * Math.PI / 5; const s = mk(x, y, 'rb-bloom', '✦', `--dx:${(Math.cos(ang) * 46).toFixed(1)}px;--dy:${(-Math.sin(ang) * 40).toFixed(1)}px;animation-delay:${i * 35}ms`); setTimeout(() => s.remove(), 1700); }
+  };
+  setTimeout(() => requestAnimationFrame(frame), 500);
+}
 function rainbowSVG(steps, per = 20, animateFrom = null){
   const cx = 300, cy = 250, R = 210; const bands = ['#f8c8dc','#fdd5c0','#fbe9ad','#c4ecd9','#c4e1f7','#cdb8ec'];
   let s = `<svg viewBox="0 0 600 270" style="width:100%">`;
@@ -581,12 +656,12 @@ async function startSession(){
     const minutes = (Date.now() - SESSION.start) / 6e4;
     if (minutes >= state.settings.maxMin && SESSION.n >= 5) break;
     const step = SESSION.steps[SESSION.idx]; drawDots();
-    const r = await Promise.race([runStep(step), SESSION.abortP]);
+    const r = await Promise.race([Promise.resolve().then(() => runStep(step)).catch(e => { console.warn('step failed', e); return {}; }), SESSION.abortP]);
     if (r && r.aborted) return endSession(true);
     if (r && r.scored){ recordAttempt(step.id, r.correct, step.act, r.help); SESSION.practiced.add(step.id);
       if (!r.correct && !SESSION.requeued[step.id]){ SESSION.requeued[step.id] = 1; const at = Math.min(SESSION.idx + 3, SESSION.steps.length);
         SESSION.steps.splice(at, 0, {id: step.id, act: step.act === 'build' ? 'readPicOrHear' : step.act}); } }
-    if (r && r.spoken) recordSpoken(step.id, r.ok, step.act, r.heard);
+    if (r && r.spoken) try { recordSpoken(step.id, r.ok, step.act, r.heard); } catch(e){ console.warn(e); }
     if (r && r.teach){ state.intro[step.id] = Date.now(); save(); }
     const nx = await Promise.race([waitNext(), SESSION.abortP]); if (nx && nx.aborted) return endSession(true);
   }
@@ -639,10 +714,7 @@ function renderFinish(s, ses, prevRainbow, leveled){
    ${leveled ? `<div style="font-size:24px;color:var(--muted)">Next time: a new letter!</div>` : ''}
    <button class="homebig" id="fh">🏠</button>`;
   show('finish');
-  const u = document.querySelector('#finish #rbUni');
-  if (u && s.done){ setTimeout(() => { const tx = +u.dataset.tx, ty = +u.dataset.ty, fx = +u.getAttribute('x'), fy = +u.getAttribute('y'); const t0 = performance.now();
-    const stepA = t => { const k = Math.min(1, (t - t0) / 1600); u.setAttribute('x', fx + (tx - fx) * k); u.setAttribute('y', fy + (ty - fy) * k - Math.sin(k * Math.PI) * 18); if (k < 1) requestAnimationFrame(stepA); };
-    requestAnimationFrame(stepA); }, 400); }
+  if (s.done) finishCelebration(prevRainbow, state.rainbow);
   const parts = [`All done for today, ${state.name}!`];
   if (words.length) parts.push(`You read ${words.length} word${words.length>1?'s':''}.`);
   if (words.length && sents) parts.push(`And ${sents} sentence${sents>1?'s':''}.`);
@@ -654,9 +726,11 @@ function renderFinish(s, ses, prevRainbow, leveled){
 
 // ===================== ACTIVITIES =====================
 // Each returns a Promise resolving {scored, correct, help} or {teach:true}.
-function sparkle(el){ const s = document.createElement('div'); s.className = 'sparkle';
-  [[10,10],[80,0],[90,70],[0,75]].forEach(([x,y],i) => { const sp = document.createElement('span'); sp.textContent = '✦'; sp.style.left = x+'%'; sp.style.top = y+'%'; sp.style.animationDelay = (i*90)+'ms'; s.appendChild(sp); });
-  el.appendChild(s); setTimeout(() => s.remove(), 1300); }
+function motionOK(){ return state.settings.anim && !matchMedia('(prefers-reduced-motion: reduce)').matches; }
+// Per-answer feedback: three tiny sparkles at the corner of the right answer, about 0.5 s. The unicorn stays still.
+function sparkle(el){ if (!el || !motionOK()) return; const s = document.createElement('div'); s.className = 'sparkle';
+  [[88,-4],[100,18],[76,-14]].forEach(([x,y],i) => { const sp = document.createElement('span'); sp.textContent = '✦'; sp.style.left = x+'%'; sp.style.top = y+'%'; sp.style.animationDelay = (i*60)+'ms'; s.appendChild(sp); });
+  el.appendChild(s); setTimeout(() => s.remove(), 700); }
 function tileBtn(html, cls = ''){ const b = document.createElement('button'); b.className = 'tile ' + cls; b.innerHTML = html; return b; }
 // Generic multiple-choice: options [{html, ok, onWrongSay}], returns promise after correct tap (errorless correction)
 function choose(container, opts, {cls = '', onRight, onWrong}){
@@ -664,7 +738,7 @@ function choose(container, opts, {cls = '', onRight, onWrong}){
     opts.forEach(o => { const b = tileBtn(o.html, cls); b.dataset.ok = o.ok ? 1 : 0; btns.push(b); container.appendChild(b);
       b.onclick = async () => { if (b.disabled) return;
         if (o.ok){ btns.forEach(x => x.disabled = true); b.classList.remove('hint'); b.classList.add('good'); sparkle(b); setUni('nod');
-          await Promise.all([onRight ? onRight(first) : null, first ? celebrate() : null]); res({scored:true, correct:first}); }
+          await (onRight ? onRight(first) : null); res({scored:true, correct:first}); }
         else { b.classList.add('miss'); b.disabled = true; setUni('tilt'); const right = btns.find(x => x.dataset.ok === '1');
           if (first){ first = false; } right.classList.add('hint'); if (onWrong) await onWrong(o); } }; });
   }); }
@@ -767,7 +841,7 @@ async function speakFlow(step, mode){
     const bMe = document.createElement('button'); bMe.innerHTML = '👧<small>you</small>';
     const bUni = document.createElement('button'); bUni.innerHTML = '🦄<small>unicorn</small>';
     if (url) lis.append(bMe); lis.append(bUni); lower.appendChild(lis);
-    const playMe = async () => { if (!url) return; bMe.classList.add('playing'); await Speech.play(url); bMe.classList.remove('playing'); };
+    const playMe = async () => { if (!url) return; bMe.classList.add('playing'); await Promise.race([Speech.play(url), sleep(5000)]); bMe.classList.remove('playing'); };
     const playModel = async () => { bUni.classList.add('playing'); await model(); bUni.classList.remove('playing'); };
     bMe.onclick = playMe; bUni.onclick = playModel;
     if (Mic.denied && !url) lower.insertAdjacentHTML('afterbegin', '<div class="asr">(No microphone. Say it out loud!)</div>');
@@ -783,8 +857,10 @@ async function speakFlow(step, mode){
     lower.appendChild(strip);
     const verdict = await new Promise(res => { strip.querySelector('.yes').onclick = () => res(true); strip.querySelector('.again').onclick = () => res(false); });
     if (firstOk === null) firstOk = verdict;
-    if (verdict){ setUni('nod'); await Promise.all([Speech.say(['Yes!']), tries === 1 ? celebrate() : null]); return {spoken:true, ok:firstOk, heard: heard ? heard[0] : ''}; }
-    if (tries >= 2){ await Speech.say(["Good practice. We'll try it again another day."]); return {spoken:true, ok:false, heard: heard ? heard[0] : ''}; }
+    // Don't wait for the audio to finish: on iPad, after the mic is used, 'ended' events can be late or never come.
+      // The next arrow shows right away while "Yes!" plays (tapping it simply cuts the audio).
+      if (verdict){ setUni('nod'); if (tries === 1) sparkle(target); Speech.say(['Yes!']); await sleep(150); return {spoken:true, ok:firstOk, heard: heard ? heard[0] : ''}; }
+    if (tries >= 2){ Speech.say(["Good practice. We'll try it again another day."]); await sleep(150); return {spoken:true, ok:false, heard: heard ? heard[0] : ''}; }
     // retry once: model again, then record again
     setUni('tilt'); lower.innerHTML = ''; lower.append(mic, bar); mic.disabled = true;
     await Speech.say(["Let's try again. Listen."]); await model(); await Speech.say(['Your turn. Tap the microphone.']);
@@ -853,7 +929,7 @@ const ACTS = {
             row.querySelectorAll('.hint').forEach(x => x.classList.remove('hint')); Speech.say([pureSound(g)]);
             if (pos === gs.length){ setUni(errs ? null : 'nod'); sparkle(slots); await sleep(500);
               const box = wordBox(w, {tappable:false, sm:true}); st.insertBefore(box, row); row.remove();
-              await Promise.all([(async () => { await Speech.say([errs ? 'There it is.' : 'Yes!']); await modelBlend(box, w); })(), errs ? null : celebrate()]);
+              await Promise.all([(async () => { await Speech.say([errs ? 'There it is.' : 'Yes!']); await modelBlend(box, w); })(), errs ? null : sparkle(box)]);
               res({scored:true, correct: errs === 0}); } }
           else { errs++; slotErr++; b.classList.remove('shake'); void b.offsetWidth; b.classList.add('shake'); setUni('tilt');
             await Speech.say(['That says', pureSound(g), {pause:250}, 'Listen.', {t:w, rate:0.5}]);
@@ -1019,6 +1095,7 @@ async function recordSound(id, row){
 }
 
 // ===================== BOOT =====================
+document.addEventListener('pointerdown', () => AudioOut.unlock(), {capture:true, passive:true});
 (async function boot(){
   load(); Speech.init(); await Promise.all([AudioDB.open().then(() => AudioDB.loadAll()), Clips.init()]);
   if ('serviceWorker' in navigator && location.protocol !== 'file:' && !QS.has('nosw')){
@@ -1026,7 +1103,7 @@ async function recordSound(id, row){
       if (navigator.serviceWorker.controller) setTimeout(ask, 4000); else navigator.serviceWorker.addEventListener('controllerchange', () => setTimeout(ask, 1000), {once:true}); reg.update().catch(() => {}); }).catch(() => {}); }
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch(e){} // ask the browser not to evict progress
   renderHome();
-  window.__anya = { get state(){ return state; }, Clips, stepClipKeys, BUILD, celebrate, buildPlan, levelCheck, mastered, available, SENTS, WORDS };
+  window.__anya = { get state(){ return state; }, Clips, AudioOut, stepClipKeys, BUILD, celebrate, buildPlan, levelCheck, mastered, available, SENTS, WORDS };
 })();
 
 </script>

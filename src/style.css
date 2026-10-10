@@ -78,8 +78,8 @@ button{font-family:inherit;color:inherit;border:0;cursor:pointer;touch-action:ma
 .sentence .w{font-size:min(10vmin,84px);font-weight:700;padding:0 .6vmin;border-radius:14px}
 .sentence .w.lit{background:var(--butter)}
 .sparkle{position:absolute;pointer-events:none;inset:-20px}
-.sparkle span{position:absolute;font-size:28px;color:#f3c34f;animation:spk .9s ease-out forwards}
-@keyframes spk{0%{opacity:0;transform:scale(.3)}40%{opacity:1}100%{opacity:0;transform:scale(1.1) translateY(-10px)}}
+.sparkle span{position:absolute;font-size:18px;color:#f3c34f;opacity:0;animation:spk .5s ease-out forwards}
+@keyframes spk{0%{opacity:0;transform:scale(.4)}35%{opacity:.95}100%{opacity:0;transform:scale(1) translateY(-6px)}}
 .uni .head{transform-origin:120px 95px;transition:transform .5s ease}
 .uni.nod .head{transform:rotate(8deg)}
 .uni.tilt .head{transform:rotate(-10deg)}
@@ -177,3 +177,12 @@ body.celebrating .uni-corner{opacity:0;transition:opacity .2s}
 .gstrip button.yes{background:var(--mint)}
 .asr{font-size:15px;color:var(--muted);min-height:20px}
 .sentence.lit-all .w{background:#fff3c4}
+
+/* end-of-lesson celebration on the rainbow */
+#finish #rbUni{transition:none}
+.rb-spark{font-size:22px;fill:#f3c34f;opacity:0;animation:rbspark 1.3s ease-out forwards;transform-box:fill-box;transform-origin:center}
+@keyframes rbspark{0%{opacity:0;transform:scale(.3)}25%{opacity:1}100%{opacity:0;transform:scale(1.1) translateY(-12px)}}
+.rb-bloom{font-size:26px;fill:#f0b93a;opacity:0;animation:rbbloom 1.5s ease-out forwards;transform-box:fill-box;transform-origin:center}
+@keyframes rbbloom{0%{opacity:0;transform:translate(0,-10px) scale(.3)}30%{opacity:1}100%{opacity:0;transform:translate(var(--dx),calc(var(--dy) - 10px)) scale(1)}}
+.rb-pop{animation:rbpop .8s ease-out;transform-box:fill-box;transform-origin:center}
+@keyframes rbpop{0%{transform:scale(1)}40%{transform:scale(1.9);fill:#f3c34f}100%{transform:scale(1)}}

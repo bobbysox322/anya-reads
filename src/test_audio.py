@@ -27,7 +27,8 @@ async def main():
         page.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
         page.on('pageerror', lambda e: errors.append('PAGEERROR ' + str(e)))
         await page.goto(BASE + 'index.html'); await page.wait_for_selector('#home.on')
-        await page.evaluate("""(()=>{ window.__plays=[]; const a = __anya.Clips.player(); a.addEventListener('playing', () => __plays.push(a.src.startsWith('blob:') ? 'clip' : a.src.slice(0,20))); })()""")
+        await page.evaluate("""(()=>{ window.__plays=[]; const a = __anya.Clips.player(); a.addEventListener('playing', () => __plays.push(a.src.startsWith('blob:') ? 'media-el' : a.src.slice(0,20)));
+            const O = __anya.AudioOut, op = O.play.bind(O); O.play = buf => { __plays.push('webaudio'); return op(buf); }; })()""")
         print('clips loaded in page:', await page.evaluate('__anya.Clips.ok'), 'build', await page.evaluate('__anya.BUILD'))
         await page.wait_for_function('navigator.serviceWorker.controller !== null', timeout=15000)
         print('service worker controlling page: yes')
@@ -45,7 +46,8 @@ async def main():
             await page.click('#fh'); await page.wait_for_selector('#home.on')
         print('activities (unmuted)', sorted(seen))
         fb = await page.evaluate('window.__ttsFallback'); plays = await page.evaluate('__plays')
-        print('clip plays', plays.count('clip'), 'other plays', [x for x in plays if x != 'clip'][:5])
+        print('clip plays via Web Audio', plays.count('webaudio'), 'via media element', plays.count('media-el'), 'other', [x for x in plays if x not in ('webaudio','media-el')][:3])
+        print('AudioContext state', await page.evaluate('__anya.AudioOut.ctx && __anya.AudioOut.ctx.state'))
         print('device-voice fallbacks:', sorted(set(fb)) or 'none')
         # wait for background precache of every clip
         n = await page.evaluate("""new Promise(res => { navigator.serviceWorker.addEventListener('message', e => e.data.type === 'audio-cached' && res(e.data.n));
@@ -74,4 +76,49 @@ async def main():
     audio404 = [x for x in bad if '/audio/' in x[1]]
     print('HTTP errors:', bad or 'none'); print('audio files fetched OK:', len(audio_ok), 'audio 404s:', audio404 or 'none')
     print('CONSOLE ERRORS:', [e for e in errors if 'ERR_INTERNET_DISCONNECTED' not in e] or 'none')
-asyncio.run(main())
+
+# Speaking practice -> grown-up 👍 must reach the next arrow quickly, even if audio 'ended' events never fire (iPad after mic use).
+BREAK_ENDED = '''(() => { for (const P of [window.AudioScheduledSourceNode && AudioScheduledSourceNode.prototype, HTMLMediaElement.prototype]){ if (!P) continue;
+    Object.defineProperty(P, 'onended', {set(){}, get(){ return null; }, configurable:true});
+    const ael = P.addEventListener; P.addEventListener = function(t, ...r){ if (t === 'ended') return; return ael.call(this, t, ...r); }; }
+  const play = HTMLMediaElement.prototype.play; HTMLMediaElement.prototype.play = function(){ play.call(this).catch(() => {}); return new Promise(() => {}); }; })()'''
+async def speak_advance(b, base, broken):
+    ctx = await b.new_context(viewport={'width': 1024, 'height': 704}, has_touch=True)
+    if broken: await ctx.add_init_script(BREAK_ENDED)
+    page = await ctx.new_page(); errs = []; page.on('pageerror', lambda e: errs.append(str(e)))
+    await page.goto(base + 'index.html?nosw=1'); await page.wait_for_selector('#home.on')
+    await page.evaluate("""(()=>{const s=__anya.state; s.level=16; s.settings.speakN=5; for(const l of LETTERS.slice(0,15)){ s.intro['L:'+l.id]=Date.now(); s.items['L:'+l.id]={a:3,c:3,h:[1,1,1],last:Date.now(),box:1,due:Date.now()+9e9}; } save();})()""")
+    await page.click('#startBtn'); times = []
+    for _ in range(3000):
+        await page.wait_for_timeout(100)
+        if await page.is_visible('#finish.on'): break
+        st = await page.evaluate("SESSION ? (SESSION.steps[SESSION.idx].shown||SESSION.steps[SESSION.idx].act) : null")
+        if await page.evaluate("document.querySelector('#next').classList.contains('show')"): await page.click('#next'); continue
+        if st in ('sayRepeat', 'readAloud'):
+            await page.wait_for_selector('#stage .mic:not([disabled])', timeout=60000); await page.click('#stage .mic')
+            await page.wait_for_selector('#stage .gstrip .yes', timeout=60000)
+            t0 = await page.evaluate('performance.now()'); await page.click('#stage .gstrip .yes')
+            await page.wait_for_selector('#next.show', timeout=8000); times.append(round(await page.evaluate('performance.now()') - t0))
+            if len(times) >= 2: break
+            await page.click('#next'); continue
+        if st == 'build':
+            for g in await page.evaluate("graphemes(SESSION.steps[SESSION.idx].id.slice(2))"):
+                await page.click(f"#stage .row .tile:not(.used):text-is('{g}')", timeout=5000)
+            await page.wait_for_selector('#next.show', timeout=30000); continue
+        oks = await page.query_selector_all('#stage .tile[data-ok="1"]:not([disabled])')
+        if oks: await oks[0].click(); continue
+    await ctx.close()
+    label = "audio 'ended' never fires" if broken else 'normal audio'
+    assert times and max(times) < 1500, (label, times)
+    print(f'SPEAK 👍 -> next arrow ({label}): {times} ms', 'page errors:', errs or 'none')
+async def speak_tests():
+    stage()
+    srv = await asyncio.create_subprocess_exec('python3', '-m', 'http.server', str(PORT), '--bind', '127.0.0.1', cwd=str(SERVE), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+    await asyncio.sleep(1)
+    async with async_playwright() as p:
+        b = await p.chromium.launch(executable_path='/usr/bin/google-chrome', args=['--autoplay-policy=no-user-gesture-required', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'])
+        await speak_advance(b, BASE, False); await speak_advance(b, BASE, True); await b.close()
+    srv.terminate()
+if __name__ == '__main__':
+    asyncio.run(speak_tests() if 'speak' in sys.argv else main())
+    if 'all' in sys.argv: asyncio.run(speak_tests())
