@@ -90,6 +90,7 @@ BREAK_ENDED = '''(() => { for (const P of [window.AudioScheduledSourceNode && Au
 async def speak_advance(b, base, broken):
     ctx = await b.new_context(viewport={'width': 1024, 'height': 704}, has_touch=True)
     if broken: await ctx.add_init_script(BREAK_ENDED)
+    await ctx.add_init_script("window.__gum = []; { const md = navigator.mediaDevices, o = md.getUserMedia.bind(md); md.getUserMedia = c => { window.__gum.push(!!(navigator.userActivation && navigator.userActivation.isActive)); return o(c); }; }")
     page = await ctx.new_page(); errs = []; page.on('pageerror', lambda e: errs.append(str(e)))
     await page.goto(base + 'index.html?nosw=1'); await page.wait_for_selector('#home.on')
     await page.evaluate("""(()=>{const s=__anya.state; s.level=16; s.settings.speakN=5; for(const l of LETTERS.slice(0,15)){ s.intro['L:'+l.id]=Date.now(); s.items['L:'+l.id]={a:3,c:3,h:[1,1,1],last:Date.now(),box:1,due:Date.now()+9e9}; } save();})()""")
@@ -112,10 +113,11 @@ async def speak_advance(b, base, broken):
             await page.wait_for_selector('#next.show', timeout=30000); continue
         oks = await page.query_selector_all('#stage .tile[data-ok="1"]:not([disabled])')
         if oks: await oks[0].click(); continue
-    await ctx.close()
+    gum = await page.evaluate('window.__gum'); await ctx.close()
+    assert gum and all(gum), ('getUserMedia not called inside the tap gesture', gum)
     label = "audio 'ended' never fires" if broken else 'normal audio'
     assert times and max(times) < 1500, (label, times)
-    print(f'SPEAK 👍 -> next arrow ({label}): {times} ms', 'page errors:', errs or 'none')
+    print(f'SPEAK 👍 -> next arrow ({label}): {times} ms; getUserMedia in gesture: {gum}', 'page errors:', errs or 'none')
 async def speak_tests():
     stage()
     srv = await asyncio.create_subprocess_exec('python3', '-m', 'http.server', str(PORT), '--bind', '127.0.0.1', cwd=str(SERVE), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)

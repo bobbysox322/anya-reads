@@ -35,6 +35,14 @@ Priority: **a parent recording** (letter sounds, Grown-ups → Record) comes fir
 
 **iPad quiet-start fix:** the app no longer calls the device voice (speechSynthesis) when recorded clips are available. On iOS, any speech synthesis, even a silent "unlock" utterance, ducks the app's other audio for about a second. Clips that play after a long pause also start with 300 ms of silence, and a sub-audible 20 Hz signal at -60 dBFS keeps the output awake.
 
+## Microphone on iPad (Safari, Home Screen app, Brave)
+- getUserMedia is called synchronously at the start of the mic tap (the iOS user-gesture rule), with plain `{audio:true}`.
+- iOS 17+: `navigator.audioSession.type` is switched to `play-and-record` for the recording, then back to `playback`. Build 20261009-2357 forced `playback` on every tap, so iOS refused the mic and the app said "No microphone".
+- The recording uses MediaRecorder with a supported type (audio/mp4 on iOS). Without MediaRecorder, it falls back to a Web Audio WAV recorder. The speech-recognition hint is off on iOS, because it competes for the mic.
+- Errors are shown by name, with steps to fix them (Brave gets its own steps). Only a real "not allowed" is remembered for the session. Without a mic, the child says it aloud and the grown-up checks, and the lesson still moves on.
+- Grown-ups → Settings → **Test microphone** records 2 s, plays it back, and shows the browser details.
+- Brave on iPad is a WKWebView browser. The mic works there, but Brave asks for permission again after each reload and needs iPad Settings → Brave → Microphone turned on. Shields don't block the mic. Shields' fingerprint protection doesn't affect playback, and Brave iOS doesn't randomize Web Audio output.
+
 ## Grown-up debug tools
 - *Settings → Start each lesson with a speaking challenge*: the first item is a speaking item, for trying out the mic flow.
 - *Debug log* panel: the last 150 events and errors (steps, mic, grown-up checks, arrow shown, auto-advance), with Copy and Clear. An optional checkbox shows the last lines on screen during lessons.
