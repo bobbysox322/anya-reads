@@ -12,7 +12,7 @@ async def play_session(page, wrong_rate=0.15, shot_acts=None, max_steps=80):
         await page.wait_for_timeout(60)
         if await page.is_visible('#finish.on'):
             return seen
-        st = await page.evaluate("SESSION ? {act: SESSION.steps[SESSION.idx].shown || SESSION.steps[SESSION.idx].act, id: SESSION.steps[SESSION.idx].id} : null")
+        st = await page.evaluate("SESSION ? {act: SESSION.steps[SESSION.idx].shown || SESSION.steps[SESSION.idx].act, id: SESSION.steps[SESSION.idx].id, idx: SESSION.idx} : null")
         if not st:
             await page.wait_for_timeout(100); continue
         nxt_visible = await page.evaluate("document.querySelector('#next') && document.querySelector('#next').classList.contains('show')")
@@ -22,14 +22,11 @@ async def play_session(page, wrong_rate=0.15, shot_acts=None, max_steps=80):
         if shot_acts is not None and act in shot_acts and act not in shot_acts['done']:
             await page.wait_for_timeout(300)
             await page.screenshot(path=SHOTS + shot_acts[act]); shot_acts['done'].add(act)
-        if act in ('sayRepeat', 'readAloud'):
-            await page.wait_for_selector('#stage .mic:not([disabled])', timeout=40000)
-            await page.click('#stage .mic')
+        if act in ('sayRepeat', 'readAloud'):  # no mic: say-it cue, pause, model, then auto-advance
             if shot_acts is not None and 'speak' in shot_acts and 'speak' not in shot_acts['done']:
-                await page.wait_for_selector('#stage .gstrip', timeout=40000); await page.screenshot(path=SHOTS + shot_acts['speak']); shot_acts['done'].add('speak')
-            await page.wait_for_selector('#stage .gstrip .yes', timeout=40000)
-            await page.click('#stage .gstrip .yes')
-            await page.wait_for_selector('#next.show', timeout=30000)
+                try: await page.wait_for_selector('#stage .saycue.on', timeout=15000); await page.screenshot(path=SHOTS + shot_acts['speak']); shot_acts['done'].add('speak')
+                except Exception: print('speak screenshot missed (cue already over)')
+            await page.wait_for_function(f"!SESSION || SESSION.idx !== {st['idx']} || document.querySelector('#next').classList.contains('show')", timeout=40000, polling=100)
             continue
         if act == 'build':
             word = st['id'][2:]

@@ -4,10 +4,10 @@ eval(fs.readFileSync(__dirname + '/../data.js', 'utf8').replace(/^const /gm, 'va
 const key = t => t.toLowerCase().replace(/[’]/g, "'").replace(/[^a-z0-9' ]+/g, ' ').replace(/\s+/g, ' ').trim();
 const out = {}; const add = (text, kind, rate, k) => { k = k || key(text); if (!out[k]) out[k] = {key:k, text, kind, rate}; };
 const NAME = 'Anya';
-const P = ["Do you want to stop?", "Listen, then say the sound.", "Listen, then say the word.", "Now you. Tap the microphone and say it.",
- "Can you read this sound out loud? Tap the microphone and say it.", "Can you read this word out loud? Tap the microphone and say it.",
- "Listen to you.", "And the unicorn.", "Listen to the unicorn.", "Yes!", "Good practice. We'll try it again another day.", "Let's try again. Listen.",
- "Your turn. Tap the microphone.", "Here is a new letter.", "This letter says", "Say it with me.", "Tap the letter to hear it again.",
+const P = ["Do you want to stop?", "Say it out loud!", "It says",
+
+ "Yes!",
+ "Here is a new letter.", "This letter says", "Say it with me.", "Tap the letter to hear it again.",
  "Tap the letter that says", "That one says", "We want", "starts with", "That is", "Listen.", "What sound does this letter make?",
  "Tap the picture that starts with that sound.", "Let's blend a new word. Watch and listen.", "Now you. Tap each letter, then say the word.",
  "That picture is", "Read the word. Then tap the picture that matches.", "You can tap the letters to hear their sounds.", "That word is", "Find",

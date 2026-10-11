@@ -31,7 +31,7 @@ const SMAP = Object.fromEntries(SENTS.map(o => [o.id, o]));
 // ===================== STATE =====================
 const KEY = 'anyaReads.v1';
 function defaults(){ return { version:1, name:'Anya', level:1, created:Date.now(),
-  settings:{ items:15, maxMin:10, voice:'', rate:0.85, soundMode:'tts', anim:true, speak:'grownup', speakN:3, asr:true, clips:true },
+  settings:{ items:15, maxMin:10, voice:'', rate:0.85, soundMode:'tts', anim:true, speak:'on', speakN:3, clips:true },
   items:{}, intro:{}, sessions:[], log:[], rainbow:0, spoken:{} }; }
 let state;
 function load(){ try { state = JSON.parse(localStorage.getItem(KEY)) || defaults(); } catch(e){ state = defaults(); }
@@ -120,8 +120,8 @@ const AudioOut = { ctx:null, bufs:{}, pend:{}, cur:null, loopEl:null,
     document.addEventListener('visibilitychange', () => { if (!this.ctx) return; if (document.hidden) this.ctx.suspend().catch(() => {}); else this.ctx.resume().catch(() => {}); });
     return c; },
   // Called on every tap. Resumes the context and, on iOS, asks for "playback" audio so the mute switch doesn't silence it.
-  unlock(){ this.resetIfNeeded(); const c = this.ensure(); if (!c) return;
-    try { if (navigator.audioSession && !Mic.busy && navigator.audioSession.type !== 'playback') navigator.audioSession.type = 'playback'; } catch(e){}
+  unlock(){ const c = this.ensure(); if (!c) return;
+    try { if (navigator.audioSession && navigator.audioSession.type !== 'playback') navigator.audioSession.type = 'playback'; } catch(e){}
     if (c.state !== 'running') c.resume().catch(() => {});
     if (!navigator.audioSession && /iP(ad|hone|od)|Macintosh/.test(navigator.userAgent) && 'ontouchend' in document && !this.loopEl){
       // older iOS: a looping silent media element makes Web Audio play even with the mute switch on
@@ -137,10 +137,7 @@ const AudioOut = { ctx:null, bufs:{}, pend:{}, cur:null, loopEl:null,
       const idle = !this.lastEnd || performance.now() - this.lastEnd > 1200; const lead = idle ? 0.3 : 0.005;
       src.onended = () => { this.lastEnd = performance.now(); fin(); }; const to = setTimeout(fin, (buf.duration + lead) * 1000 + 1500); this.cur = {src, fin}; src.start(c.currentTime + lead); }); },
   stop(){ if (this.cur){ const {src, fin} = this.cur; this.cur = null; try { src.onended = null; src.stop(); } catch(e){} this.lastEnd = performance.now(); fin(); } },
-  // after the mic: iOS can leave output on the quiet "play and record" route. Next tap: back to playback, recreate the context if it's not running.
-  afterMic(){ this.micUsed = true; },
-  resetIfNeeded(){ if (!this.micUsed || !this.ctx) return; this.micUsed = false;
-    if (this.ctx.state !== 'running'){ try { this.ctx.close(); } catch(e){} this.ctx = null; this.ensure(); } },
+
 };
 window.__ttsFallback = [];
 const Speech = {
@@ -461,7 +458,7 @@ function endSession(aborted){
   Speech.cancel(); const s = curSessRec(); const ses = SESSION; SESSION = null; PROMPT = null;
   if (!s) return renderHome();
   s.end = Date.now(); s.dur = Math.round((s.end - s.start) / 1000);
-  Mic.release(); const total = ses.steps.filter(x => !x.teach && !x.speak).length;
+  const total = ses.steps.filter(x => !x.teach && !x.speak).length;
   s.done = !aborted || s.n >= Math.ceil(total * 0.6);
   if (s.n === 0 && aborted){ state.sessions = state.sessions.filter(x => x.id !== s.id); save(); return renderHome(); }
   const prevRainbow = state.rainbow; if (s.done) state.rainbow++;
@@ -552,73 +549,10 @@ function celebrate(kind){
   clearTimeout(celebrate.t); celebrate.t = setTimeout(() => { host.innerHTML = ''; host.className = ''; document.body.classList.remove('celebrating'); }, dur + 50);
   return sleep(dur);
 }
-// ---------------- microphone (speaking practice) ----------------
-// Microphone. iOS rules this follows:
-// - getUserMedia is called synchronously at the very start of the tap handler (request()), so iOS sees the user gesture.
-// - On iOS 17+, navigator.audioSession.type must be 'play-and-record' while capturing. While it was 'playback'
-//   (which we set on every tap for the mute switch), Safari refused the mic, and the app showed "No microphone".
-// - Plain {audio:true} constraints. MediaRecorder with a supported type (iOS: audio/mp4), else a Web Audio WAV recorder.
-// - Errors are kept by name. Only NotAllowedError (a real "no") is sticky.
-const IS_IOS = /iP(ad|hone|od)/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
-// Brave on iPad is a WKWebView browser: the mic works there (iOS 14.3+), but Brave asks for permission again after
-// every reload, and the iPad's Settings → Brave → Microphone switch must be on.
-const IS_BRAVE = !!(navigator.brave && typeof navigator.brave.isBrave === 'function');
-function envInfo(){ const mr = window.MediaRecorder ? ['audio/mp4','audio/webm'].filter(t => { try { return MediaRecorder.isTypeSupported(t); } catch(e){ return false; } }).join('/') || 'yes' : 'none';
-  return `browser=${IS_BRAVE ? 'Brave' : /CriOS/.test(navigator.userAgent) ? 'Chrome-iOS' : /FxiOS/.test(navigator.userAgent) ? 'Firefox-iOS' : 'Safari/other'} ios=${IS_IOS} standalone=${!!(navigator.standalone || matchMedia('(display-mode: standalone)').matches)} audioSession=${navigator.audioSession ? navigator.audioSession.type : 'none'} getUserMedia=${!!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)} MediaRecorder=${mr} SpeechRecognition=${!!(window.SpeechRecognition || window.webkitSpeechRecognition)} secure=${isSecureContext}`; }
-const Mic = { stream:null, denied:false, busy:false, err:null, pending:null,
-  supported(){ return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia); },
-  // call FIRST THING in a tap handler (no await before it)
-  request(){ if (!this.supported()){ this.err = {name:'NoAPI', message:'getUserMedia not available'}; return Promise.resolve(null); }
-    if (this.denied) return Promise.resolve(null);
-    this.busy = true;
-    try { if (navigator.audioSession) navigator.audioSession.type = 'play-and-record'; } catch(e){ DBG.log('audioSession set failed ' + e); }
-    let p; try { p = navigator.mediaDevices.getUserMedia({audio:true}); } catch(e){ p = Promise.reject(e); }
-    DBG.log('getUserMedia called (in tap) session=' + (navigator.audioSession ? navigator.audioSession.type : 'n/a') + ' standalone=' + !!(navigator.standalone || matchMedia('(display-mode: standalone)').matches));
-    return this.pending = p.then(st => { this.stream = st; this.err = null; DBG.log('mic ok: ' + st.getAudioTracks().map(t => t.label || 'track').join(',')); return st; })
-      .catch(e => { this.err = {name: e && e.name || 'Error', message: e && e.message || String(e)}; if (this.err.name === 'NotAllowedError' || this.err.name === 'SecurityError') this.denied = true;
-        DBG.log('mic error ' + this.err.name + ': ' + this.err.message); this.busy = false; this.restoreSession(); return null; }); },
-  pickType(){ if (!window.MediaRecorder) return null; const T = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/aac', 'audio/ogg;codecs=opus'];
-    if (!MediaRecorder.isTypeSupported) return ''; return T.find(t => { try { return MediaRecorder.isTypeSupported(t); } catch(e){ return false; } }) || ''; },
-  async record(ms, streamP){ const s = await (streamP || this.request()); if (!s) return null;
-    const type = this.pickType(); let out = null;
-    if (type !== null){ out = await new Promise(res => { const chunks = []; let mr;
-        try { mr = type ? new MediaRecorder(s, {mimeType: type}) : new MediaRecorder(s); } catch(e){ DBG.log('MediaRecorder failed ' + (e.name || '') + ' ' + e.message + ' type=' + type); return res(undefined); }
-        mr.ondataavailable = e => e.data && e.data.size && chunks.push(e.data);
-        mr.onerror = e => DBG.log('MediaRecorder error ' + (e.error && e.error.name));
-        let done = false; const fin = () => { if (done) return; done = true; res(chunks.length ? URL.createObjectURL(new Blob(chunks, {type: mr.mimeType || type || 'audio/mp4'})) : null); };
-        mr.onstop = fin; try { mr.start(250); } catch(e){ DBG.log('MediaRecorder start failed ' + e.message); return res(undefined); }
-        setTimeout(() => { try { if (mr.state !== 'inactive') mr.stop(); } catch(e){} setTimeout(fin, 1500); }, ms); }); }
-    if (out === undefined || type === null) out = await this.recordWav(s, ms); // no or broken MediaRecorder: Web Audio -> WAV
-    this.release(); DBG.log('recorded ' + (out ? 'ok' : 'nothing') + ' via ' + (type === null || out === undefined ? 'wav' : (type || 'default')));
-    return out; },
-  recordWav(s, ms){ return new Promise(res => { try { const c = AudioOut.ensure(); if (!c) return res(null); c.resume().catch(() => {});
-      const src = c.createMediaStreamSource(s), proc = c.createScriptProcessor(4096, 1, 1), bufs = []; const mute = c.createGain(); mute.gain.value = 0;
-      proc.onaudioprocess = e => bufs.push(new Float32Array(e.inputBuffer.getChannelData(0))); src.connect(proc); proc.connect(mute); mute.connect(c.destination);
-      setTimeout(() => { try { src.disconnect(); proc.disconnect(); } catch(e){} const n = bufs.reduce((a, b) => a + b.length, 0); if (!n) return res(null);
-        const sr = c.sampleRate, dv = new DataView(new ArrayBuffer(44 + n * 2)); const W = (o, t) => [...t].forEach((ch, i) => dv.setUint8(o + i, ch.charCodeAt(0)));
-        W(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); W(8, 'WAVEfmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true); dv.setUint32(24, sr, true); dv.setUint32(28, sr * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true); W(36, 'data'); dv.setUint32(40, n * 2, true);
-        let o = 44; for (const b of bufs) for (let i = 0; i < b.length; i++, o += 2) dv.setInt16(o, Math.max(-1, Math.min(1, b[i])) * 0x7fff, true);
-        res(URL.createObjectURL(new Blob([dv], {type: 'audio/wav'}))); }, ms); } catch(e){ DBG.log('wav recorder failed ' + e.message); res(null); } }); },
-  restoreSession(){ try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch(e){} },
-  release(){ if (this.stream){ this.stream.getTracks().forEach(t => t.stop()); this.stream = null; } this.busy = false; this.restoreSession(); AudioOut.afterMic(); }, // free the mic so iPad audio returns to the speaker
-  message(){ const n = this.err && this.err.name;
-    if ((n === 'NotAllowedError' || n === 'SecurityError') && IS_BRAVE) return 'Brave blocked the microphone. Grown-up: when Brave asks to use the microphone, tap Allow (it asks again after each reload). If it never asks, turn on iPad Settings → Brave → Microphone. Still stuck? Tap the Brave lion → Shields off for this site, or open the game in Safari. For now, say it out loud!';
-    if (n === 'NotAllowedError' || n === 'SecurityError') return 'The microphone is blocked for this app. Grown-up: allow it (Safari: aA → Website Settings → Microphone; Home Screen app: Settings → Privacy & Security → Microphone), then reload. For now, say it out loud!';
-    if (n === 'NoAPI' && IS_BRAVE) return 'Brave can\u2019t record here. Update Brave (and iPadOS) or open the game in Safari. For now, say it out loud!';
-    if (n === 'NotFoundError' || n === 'OverconstrainedError') return 'No microphone was found. Say it out loud!';
-    if (n === 'NotReadableError' || n === 'AbortError') return 'The microphone is busy (another app or call?). Say it out loud!';
-    if (n === 'NoAPI') return 'This browser can\u2019t record. Say it out loud!';
-    return n ? `Microphone problem (${n}). Say it out loud!` : 'Say it out loud!'; },
-};
-function asrListen(ms){ return new Promise(res => { const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR || !state.settings.asr || MUTE || IS_IOS) return res(null);
-  try { const r = new SR(); r.lang = 'en-US'; r.interimResults = false; r.maxAlternatives = 5; let out = null;
-    r.onresult = e => { out = [...e.results[0]].map(a => a.transcript.toLowerCase().replace(/[^a-z ]/g,'').trim()); };
-    r.onerror = () => {}; r.onend = () => res(out); r.start(); setTimeout(() => { try { r.stop(); } catch(e){} }, ms + 400); setTimeout(() => res(out), ms + 2500);
-  } catch(e){ res(null); } }); }
-const MICSVG = `<svg viewBox="0 0 24 24"><rect x="8.5" y="3" width="7" height="12" rx="3.5" fill="#3b3352"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M8.5 21h7" stroke="#3b3352" stroke-width="2" fill="none" stroke-linecap="round"/></svg>`;
-// Shared flow for both speaking activities.
-// mode 'repeat': model first, then she says it.  mode 'read': she reads first, then hears the model.
+// ---------------- speaking practice ----------------
+// Speaking practice, no microphone. She says it aloud; nothing records or grades it.
+// mode 'repeat': the unicorn models it first. mode 'read': she tries first.
+// Then "Say it out loud!", a visible ~2 s pause, the model ("It says … mat!"), and the item counts as practiced.
 async function speakFlow(step, mode){
   const k = step.id[0], v = step.id.slice(2), st = $('#stage');
   const text = k === 'H' ? HMAP[v].w : v; let target;
@@ -626,63 +560,18 @@ async function speakFlow(step, mode){
   else target = wordBox(text, {tappable:false, heart: k === 'H' ? HMAP[v].heart : null, sm:true});
   st.appendChild(target);
   const model = async () => { if (k === 'L') await Speech.say(sound(v, false)); else if (k === 'W') await modelBlend(target, v); else await Speech.say([{t:text, rate:0.7}]); };
-  const what = k === 'L' ? 'sound' : 'word';
-  const mic = document.createElement('button'); mic.className = 'mic'; mic.setAttribute('aria-label','Record'); mic.innerHTML = MICSVG;
-  const bar = document.createElement('div'); bar.className = 'recbar'; bar.innerHTML = '<i></i>';
-  const lower = document.createElement('div'); lower.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:2vh';
-  lower.append(mic, bar); st.appendChild(lower);
-  const intro = mode === 'repeat' ? async () => { await Speech.say([`Listen, then say the ${what}.`]); await model(); await Speech.say(['Now you. Tap the microphone and say it.']); }
-                                 : async () => { await Speech.say([`Can you read this ${what} out loud? Tap the microphone and say it.`]); };
-  prompt(intro);
-  const noMic = !Mic.supported();
-  let firstOk = null, heard = null, tries = 0;
-  const attempt = () => new Promise(res => {
-    mic.disabled = false;
-    mic.onclick = () => { const streamP = (!noMic && !Mic.denied) ? Mic.request() : null; // must be first: iOS user-gesture rule
-      mic.onclick = null; mic.disabled = true; Speech.cancel(); tries++; (async () => {
-      let url = null;
-      if (streamP){ const ms = k === 'L' ? 2000 : 2600; mic.classList.add('rec'); bar.style.setProperty('--ms', ms + 'ms'); bar.classList.remove('go'); void bar.offsetWidth; bar.classList.add('go');
-        const asrP = (k !== 'L') ? asrListen(ms) : Promise.resolve(null);
-        DBG.log('mic record start'); url = await Mic.record(ms, streamP); DBG.log('mic record done ' + (url ? 'ok' : 'none') + ' ctx=' + (AudioOut.ctx && AudioOut.ctx.state)); mic.classList.remove('rec'); bar.classList.remove('go'); heard = await Promise.race([asrP, sleep(2500).then(() => null)]); }
-      res(url); })().catch(e => { DBG.log('mic tap failed ' + e); res(null); }); }; });
-  while (true){
-    const url = await attempt();
-    lower.innerHTML = '';
-    // playback: her attempt next to the model
-    const lis = document.createElement('div'); lis.className = 'listen';
-    const bMe = document.createElement('button'); bMe.innerHTML = '👧<small>you</small>';
-    const bUni = document.createElement('button'); bUni.innerHTML = '🦄<small>unicorn</small>';
-    if (url) lis.append(bMe); lis.append(bUni); lower.appendChild(lis);
-    const playMe = async () => { if (!url) return; bMe.classList.add('playing'); await Promise.race([Speech.play(url), sleep(5000)]); bMe.classList.remove('playing'); };
-    const playModel = async () => { bUni.classList.add('playing'); await model(); bUni.classList.remove('playing'); };
-    bMe.onclick = playMe; bUni.onclick = playModel;
-    if (!url) lower.insertAdjacentHTML('afterbegin', `<div class="asr">${esc(Mic.message())}</div>`);
-    if (url){ await Speech.say(['Listen to you.']); await playMe(); await sleep(250); await Speech.say(['And the unicorn.']); } else await Speech.say(['Listen to the unicorn.']);
-    await playModel();
-    PROMPT = async () => { await playMe(); await sleep(200); await playModel(); };
-    if (state.settings.speak === 'self'){ return {spoken:true, ok:null, heard: heard ? heard[0] : ''}; }
-    // grown-up check (speech recognition is only a soft hint, never decides)
-    const want = text.toLowerCase(); const match = heard && heard.some(h => h.split(' ').includes(want));
-    const strip = document.createElement('div'); strip.className = 'gstrip';
-    strip.innerHTML = `<div class="lbl">Grown-up: did that sound right?${heard ? `<br><span class="asr">${match ? 'computer heard it ✓' : 'computer heard: “' + esc(heard[0] || '') + '”'}</span>` : ''}</div>
-      <button class="yes" aria-label="Yes">👍</button><button class="again" aria-label="Try again">🔁</button>`;
-    lower.appendChild(strip);
-    const verdict = await new Promise(res => { let got = false; const pickV = v => () => { if (got) return; got = true; DBG.log('grown-up verdict ' + v); res(v); };
-      const y = strip.querySelector('.yes'), a = strip.querySelector('.again'); y.onclick = y.onpointerup = pickV(true); a.onclick = a.onpointerup = pickV(false); });
-    if (firstOk === null) firstOk = verdict;
-    const result = ok => ({spoken:true, ok, heard: heard ? heard[0] : ''});
-    if (verdict || tries >= 2){ // whatever happens below, the step ends: tell the runner directly too
-      const r = result(verdict ? firstOk : false); const ses = SESSION; setTimeout(() => { if (ses && ses.force && ses.steps[ses.idx] === step) ses.force(r); }, 600); }
-    // Don't wait for the audio to finish: on iPad, after the mic is used, 'ended' events can be late or never come.
-      // The next arrow shows right away while "Yes!" plays (tapping it simply cuts the audio).
-    if (verdict){ try { setUni('nod'); if (tries === 1) sparkle(target); Speech.say(['Yes!']).catch(() => {}); } catch(e){ console.warn('yes feedback', e); } return result(firstOk); }
-    if (tries >= 2){ try { Speech.say(["Good practice. We'll try it again another day."]).catch(() => {}); } catch(e){} return result(false); }
-    // retry once: model again, then record again
-    setUni('tilt'); lower.innerHTML = ''; lower.append(mic, bar); mic.disabled = true;
-    await Speech.say(["Let's try again. Listen."]); await model(); await Speech.say(['Your turn. Tap the microphone.']);
-  }
-}
-
+  const cue = document.createElement('div'); cue.className = 'saycue'; cue.innerHTML = '<span class="bubble">🗣️</span><span class="dots"><i></i><i></i><i></i></span>';
+  st.appendChild(cue);
+  const run = async () => {
+    cue.classList.remove('on', 'done');
+    if (mode === 'repeat'){ await Speech.say(['Listen.']); await model(); await sleep(250); }
+    await Speech.say(['Say it out loud!']);
+    cue.classList.add('on'); await sleep(2200); cue.classList.remove('on'); cue.classList.add('done');
+    await Speech.say(['It says']); await model(); };
+  PROMPT = run;
+  try { await run(); } catch(e){ console.warn('speak flow', e); }
+  sparkle(target);
+  return {spoken:true, ok:true}; }
 const ACTS = {
   sayRepeat(step){ return speakFlow(step, 'repeat'); },
   readAloud(step){ return speakFlow(step, 'read'); },
@@ -850,17 +739,12 @@ function renderDash(){
       <label>Device voice speed: <span id="rv">${state.settings.rate}</span></label><input id="sRate" type="range" min="0.6" max="1.1" step="0.05" value="${state.settings.rate}">
       <label>How to say letter sounds (when no recording)</label><select id="sMode"><option value="tts" ${state.settings.soundMode==='tts'?'selected':''}>Say the sound + "as in apple"</option><option value="word" ${state.settings.soundMode==='word'?'selected':''}>Keyword only ("the first sound in apple")</option></select>
       <div><button class="btn alt" id="sTest">Test voice</button></div>
-      <label>Speaking practice (she says sounds/words into the mic)</label><select id="sSpeak"><option value="grownup" ${state.settings.speak==='grownup'?'selected':''}>On, a grown-up checks (👍 / 🔁)</option><option value="self" ${state.settings.speak==='self'?'selected':''}>On, self-check (counts as practice)</option><option value="off" ${state.settings.speak==='off'?'selected':''}>Off</option></select>
+      <label>Speaking practice (she says sounds and words out loud; no microphone)</label><select id="sSpeak"><option value="on" ${state.settings.speak!=='off'?'selected':''}>On</option><option value="off" ${state.settings.speak==='off'?'selected':''}>Off</option></select>
       <label>Speaking items per session</label><select id="sSpeakN">${[1,2,3,5].map(n => `<option ${n === state.settings.speakN ? 'selected' : ''}>${n}</option>`).join('')}</select>
-      <div><button class="btn alt" id="micTest">Test microphone</button> <span class="note" id="micRes"></span></div>
       <label><input type="checkbox" id="sSpeakFirst" ${state.settings.speakFirst ? 'checked' : ''}> Start each lesson with a speaking challenge (handy for trying it out)</label>
-      <label><input type="checkbox" id="sAsr" ${state.settings.asr ? 'checked' : ''}> Show a speech-recognition hint for words (hint only, never marks wrong)</label>
       <label><input type="checkbox" id="sAnim" ${state.settings.anim ? 'checked' : ''}> Short unicorn animation after a correct answer</label>
       <label>Level (move if ${esc(state.name)} already knows letters, or needs a step back)</label><select id="sLevel">${levelOpts}</select>
       <div><button class="btn" id="sSave">Save settings</button> <span id="saved" class="note"></span></div></div>
-    <div class="panel"><h3>Record letter sounds (recommended)</h3>
-      <div class="note">The unicorn voice's letter sounds were cut from real words, and a few (h, v, g, z and the "bouncy" stops) are only close. You can record yourself for any sound. Say it short and clean, like /m/, not "em" or "muh". Each recording is about 1.5 seconds and replaces the unicorn voice for that sound. Recordings stay on this device and are not in the export.</div>
-      <div class="reclist" id="reclist" style="margin-top:10px"></div></div>
     <div class="panel"><h3>Debug log</h3>
       <div class="note">If something gets stuck, open this and send a photo or copy of the last lines.</div>
       <label><input type="checkbox" id="sDbgOv" ${state.settings.debugOverlay ? 'checked' : ''}> Show the last log lines on screen during lessons (then tap Save settings)</label>
@@ -878,14 +762,11 @@ function renderDash(){
   $('#dclose').onclick = () => { Speech.cancel(); renderHome(); };
   $('#sRate').oninput = e => $('#rv').textContent = e.target.value;
   $('#dbgCopy').onclick = () => { const t = `Anya Reads ${BUILD}\n${navigator.userAgent}\n` + DBG.list.join('\n'); (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => $('#dbgCopy').textContent = 'Copied ✓').catch(() => { const r = document.createRange(); r.selectNodeContents($('#dbgList')); getSelection().removeAllRanges(); getSelection().addRange(r); }); };
-  $('#micTest').onclick = () => { const p = Mic.request(); const out = $('#micRes'); out.textContent = 'Recording 2 seconds… say something!'; // request() first: iOS gesture rule
-    (async () => { const url = await Mic.record(2000, p); if (!url){ out.textContent = '✗ ' + Mic.message() + (Mic.err ? ` [${Mic.err.name}: ${Mic.err.message}]` : ''); return; }
-      out.textContent = '✓ Recorded. Playing it back…'; await Speech.play(url); out.textContent = '✓ Microphone works. ' + envInfo(); })().catch(e => { out.textContent = '✗ ' + e; }); };
   $('#dbgClear').onclick = () => { DBG.list = []; try { localStorage.removeItem(DBG.key); } catch(e){} $('#dbgList').textContent = '(empty)'; };
   $('#sTest').onclick = () => { Speech.unlock(); state.settings.clips = $('#sClips').checked; state.settings.voice = $('#sVoice').value; state.settings.rate = +$('#sRate').value; state.settings.soundMode = $('#sMode').value; Speech.choose(); Speech.say(['Tap the letter that says', ...sound('m'), {pause:300}, 'Let\'s blend. ', pureSound('s'), pureSound('a'), pureSound('t'), {t:'sat', rate:0.5}, 'sat']); };
   $('#sSave').onclick = () => { state.name = $('#sName').value.trim() || 'Anya'; state.settings.items = +$('#sItems').value; state.settings.maxMin = +$('#sMin').value;
     state.settings.voice = $('#sVoice').value; state.settings.rate = +$('#sRate').value; state.settings.soundMode = $('#sMode').value; Speech.choose();
-    state.settings.clips = $('#sClips').checked; state.settings.speakFirst = $('#sSpeakFirst').checked; state.settings.debugOverlay = $('#sDbgOv').checked; state.settings.speak = $('#sSpeak').value; state.settings.speakN = +$('#sSpeakN').value; state.settings.asr = $('#sAsr').checked; state.settings.anim = $('#sAnim').checked;
+    state.settings.clips = $('#sClips').checked; state.settings.speakFirst = $('#sSpeakFirst').checked; state.settings.debugOverlay = $('#sDbgOv').checked; state.settings.speak = $('#sSpeak').value; state.settings.speakN = +$('#sSpeakN').value; state.settings.anim = $('#sAnim').checked;
     const nl = +$('#sLevel').value; if (nl !== state.level){ state.level = nl; for (let i = 0; i < nl - 1; i++) state.intro['L:'+LETTERS[i].id] = state.intro['L:'+LETTERS[i].id] || Date.now(); }
     save(); renderDash(); setTimeout(() => { const s = $('#saved'); if (s) s.textContent = 'Saved ✓'; }, 0); };
   $('#exp').onclick = () => { const blob = new Blob([JSON.stringify(state, null, 1)], {type:'application/json'}); const a = document.createElement('a');
@@ -894,39 +775,17 @@ function renderDash(){
       if (!d || d.version !== 1 || !d.items) throw new Error('not an Anya Reads file'); if (!confirm('Replace current progress with the imported file?')) return;
       state = d; load2(); save(); renderDash(); alert('Imported.'); } catch(err){ alert('Could not import: ' + err.message); } }; r.readAsText(f); };
   $('#rst').onclick = () => { if (confirm('Erase ALL progress for ' + state.name + '? This cannot be undone. (Export first if unsure.)')){ const nm = state.name, st = state.settings; state = defaults(); state.name = nm; state.settings = st; save(); renderDash(); } };
-  renderRecList();
 }
 function spokenPanel(){
-  const ent = Object.entries(state.spoken || {}); if (!ent.length) return `<div class="note">No speaking practice yet. It starts once an item has 2+ correct taps. Mode: <b>${state.settings.speak}</b>.${Mic.denied ? ' Microphone permission was denied, so she can still say it aloud and a grown-up checks.' : ''}</div>`;
-  const tot = ent.reduce((a,[,x]) => a + x.a, 0), chk = ent.reduce((a,[,x]) => a + x.chk, 0), ok = ent.reduce((a,[,x]) => a + x.c, 0);
-  const rows = ent.sort((a,b) => (a[1].chk ? a[1].c/a[1].chk : 2) - (b[1].chk ? b[1].c/b[1].chk : 2) || b[1].a - a[1].a).slice(0, 12)
-    .map(([id,x]) => `<tr><td>${esc(itemLabel(id))}</td><td>${x.chk ? Math.round(100*x.c/x.chk)+'%' : 'practice only'}</td><td>${x.a}</td><td>${fmtDate(x.last)}</td></tr>`).join('');
-  return `<div class="sub" style="margin:0 0 8px">${tot} spoken tries · ${chk ? Math.round(100*ok/chk) + '% sounded right (grown-up checked)' : 'not checked yet'}</div>
-   <table><tr><th>Item</th><th>Spoken</th><th>Tries</th><th>Last</th></tr>${rows}</table><div class="legend">Separate from tap accuracy. Lowest first.</div>`; }
+  const ent = Object.entries(state.spoken || {}); const tot = ent.reduce((a,[,x]) => a + x.a, 0);
+  if (!tot) return `<div class="note">No speaking practice yet. It starts once an item has 2+ correct taps.</div>`;
+  const recent = ent.sort((a,b) => b[1].last - a[1].last).slice(0, 14).map(([id]) => `<span class="chip">${esc(itemLabel(id))}</span>`).join('');
+  return `<div class="sub" style="margin:0 0 8px">${tot} items said out loud (${ent.length} different)</div><div class="chips">${recent}</div><div class="legend">Most recent first. Nothing is recorded.</div>`; }
 function load2(){ const d = defaults(); for (const k in d) if (state[k] === undefined) state[k] = d[k]; state.settings = {...d.settings, ...state.settings}; }
-function renderRecList(){
-  const host = $('#reclist'); if (!host) return;
-  host.innerHTML = LETTERS.map(l => `<div class="recrow ${Speech.recs[l.id] ? 'has' : ''}" data-l="${l.id}"><b>${l.id}</b><button class="p" title="Play">▶</button><button class="r" title="Record">Rec</button>${Speech.recs[l.id] ? '<button class="d" title="Delete">Del</button>' : ''}</div>`).join('');
-  host.querySelectorAll('.recrow').forEach(row => { const id = row.dataset.l;
-    row.querySelector('.p').onclick = () => Speech.say([pureSound(id)]);
-    row.querySelector('.r').onclick = () => recordSound(id, row);
-    const d = row.querySelector('.d'); if (d) d.onclick = async () => { await AudioDB.del(id); delete Speech.recs[id]; renderRecList(); }; });
-  if (!AudioDB.db || !window.MediaRecorder) host.insertAdjacentHTML('afterbegin', '<div class="note" style="grid-column:1/-1">Recording isn’t available in this browser (it needs microphone access and https or localhost).</div>');
-}
-async function recordSound(id, row){
-  if (!navigator.mediaDevices || !window.MediaRecorder || !AudioDB.db) return alert('Recording is not supported here.');
-  let stream; try { stream = await navigator.mediaDevices.getUserMedia({audio:true}); } catch(e){ return alert('Microphone permission was not given.'); }
-  row.classList.add('rec'); const chunks = []; const mr = new MediaRecorder(stream);
-  mr.ondataavailable = e => e.data.size && chunks.push(e.data);
-  mr.onstop = async () => { stream.getTracks().forEach(t => t.stop()); row.classList.remove('rec'); const blob = new Blob(chunks, {type: mr.mimeType || 'audio/webm'});
-    await AudioDB.put(id, blob); if (Speech.recs[id]) URL.revokeObjectURL(Speech.recs[id]); Speech.recs[id] = URL.createObjectURL(blob); renderRecList(); Speech.say([{rec:id}]); };
-  await sleep(250); mr.start(); setTimeout(() => mr.state !== 'inactive' && mr.stop(), 1500);
-}
-
 // ===================== BOOT =====================
 document.addEventListener('pointerdown', () => AudioOut.unlock(), {capture:true, passive:true});
 (async function boot(){
-  load(); DBG.log('boot ' + BUILD + ' ' + envInfo()); Speech.init(); await Promise.all([AudioDB.open().then(() => AudioDB.loadAll()), Clips.init()]);
+  load(); DBG.log('boot ' + BUILD + ' ' + navigator.userAgent); Speech.init(); await Promise.all([AudioDB.open().then(() => AudioDB.loadAll()), Clips.init()]);
   if ('serviceWorker' in navigator && location.protocol !== 'file:' && !QS.has('nosw')){
     navigator.serviceWorker.register('./sw.js').then(reg => { const ask = () => navigator.serviceWorker.controller && navigator.serviceWorker.controller.postMessage({type:'precache-audio'});
       if (navigator.serviceWorker.controller) setTimeout(ask, 4000); else navigator.serviceWorker.addEventListener('controllerchange', () => setTimeout(ask, 1000), {once:true}); reg.update().catch(() => {}); }).catch(() => {}); }

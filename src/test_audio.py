@@ -17,12 +17,13 @@ async def main():
     print('manifest clips', len(man['clips']), 'missing files', missing)
     bad, audio_ok, errors = [], set(), []
     async with async_playwright() as p:
-        b = await p.chromium.launch(executable_path='/usr/bin/google-chrome', args=['--autoplay-policy=no-user-gesture-required', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'])
+        b = await p.chromium.launch(executable_path='/usr/bin/google-chrome', args=['--autoplay-policy=no-user-gesture-required'])
         ctx = await b.new_context(viewport={'width': 1180, 'height': 820}, has_touch=True)
         def on_resp(r):
             if r.status >= 400: bad.append((r.status, r.url))
             elif '/audio/' in r.url: audio_ok.add(r.url)
         ctx.on('response', on_resp)
+        await ctx.add_init_script(NO_MIC)
         # the device voice must never be touched while clips are available: on iOS any speech synthesis ducks our audio
         await ctx.add_init_script("window.__ttsSpeak = 0; if (window.speechSynthesis){ const sp = speechSynthesis.speak.bind(speechSynthesis); speechSynthesis.speak = u => { window.__ttsSpeak++; return sp(u); }; }")
         page = await ctx.new_page(); T.errors = errors
@@ -51,6 +52,7 @@ async def main():
         print('clip plays via Web Audio', plays.count('webaudio'), 'via media element', plays.count('media-el'), 'other', [x for x in plays if x not in ('webaudio','media-el')][:3])
         print('AudioContext state', await page.evaluate('__anya.AudioOut.ctx && __anya.AudioOut.ctx.state'))
         print('device-voice fallbacks:', sorted(set(fb)) or 'none')
+        print('getUserMedia calls during sessions:', await page.evaluate('window.__gum')); assert await page.evaluate('window.__gum') == 0
         nspeak = await page.evaluate('window.__ttsSpeak'); print('speechSynthesis.speak calls during clip sessions:', nspeak); assert nspeak == 0, 'speechSynthesis used (would duck audio on iOS)'
         lead = await page.evaluate("(async () => { const O = __anya.AudioOut; O.lastEnd = performance.now() - 5000; const C = __anya.Clips; const u = await C.load('yes'); const b = await O.decode(u); const t0 = O.ctx.currentTime; let st = 0; const orig = O.ctx.createBufferSource.bind(O.ctx); O.ctx.createBufferSource = () => { const s = orig(); const s0 = s.start.bind(s); s.start = w => { st = w - O.ctx.currentTime; s0(w); }; return s; }; await O.play(b); O.ctx.createBufferSource = orig; return Math.round(st * 1000); })()")
         print('silent pre-roll before a screen-start clip:', lead, 'ms'); assert 250 <= lead <= 350
@@ -87,43 +89,43 @@ BREAK_ENDED = '''(() => { for (const P of [window.AudioScheduledSourceNode && Au
     Object.defineProperty(P, 'onended', {set(){}, get(){ return null; }, configurable:true});
     const ael = P.addEventListener; P.addEventListener = function(t, ...r){ if (t === 'ended') return; return ael.call(this, t, ...r); }; }
   const play = HTMLMediaElement.prototype.play; HTMLMediaElement.prototype.play = function(){ play.call(this).catch(() => {}); return new Promise(() => {}); }; })()'''
+NO_MIC = "window.__gum = 0; if (window.MediaDevices) MediaDevices.prototype.getUserMedia = function(){ window.__gum++; return Promise.reject(new DOMException('test', 'NotAllowedError')); };"
 async def speak_advance(b, base, broken):
+    """Speaking items (no microphone) must finish by themselves and auto-advance, even if audio 'ended' never fires."""
     ctx = await b.new_context(viewport={'width': 1024, 'height': 704}, has_touch=True)
     if broken: await ctx.add_init_script(BREAK_ENDED)
-    await ctx.add_init_script("window.__gum = []; { const md = navigator.mediaDevices, o = md.getUserMedia.bind(md); md.getUserMedia = c => { window.__gum.push(!!(navigator.userActivation && navigator.userActivation.isActive)); return o(c); }; }")
+    await ctx.add_init_script(NO_MIC)
     page = await ctx.new_page(); errs = []; page.on('pageerror', lambda e: errs.append(str(e)))
     await page.goto(base + 'index.html?nosw=1'); await page.wait_for_selector('#home.on')
-    await page.evaluate("""(()=>{const s=__anya.state; s.level=16; s.settings.speakN=5; for(const l of LETTERS.slice(0,15)){ s.intro['L:'+l.id]=Date.now(); s.items['L:'+l.id]={a:3,c:3,h:[1,1,1],last:Date.now(),box:1,due:Date.now()+9e9}; } save();})()""")
-    await page.click('#startBtn'); times = []
-    for _ in range(3000):
-        await page.wait_for_timeout(100)
-        if await page.is_visible('#finish.on'): break
-        st = await page.evaluate("SESSION ? (SESSION.steps[SESSION.idx].shown||SESSION.steps[SESSION.idx].act) : null")
-        if await page.evaluate("document.querySelector('#next').classList.contains('show')"): await page.click('#next'); continue
-        if st in ('sayRepeat', 'readAloud'):
-            await page.wait_for_selector('#stage .mic:not([disabled])', timeout=60000); await page.click('#stage .mic')
-            await page.wait_for_selector('#stage .gstrip .yes', timeout=60000)
-            t0 = await page.evaluate('performance.now()'); await page.click('#stage .gstrip .yes')
-            await page.wait_for_selector('#next.show', timeout=8000); times.append(round(await page.evaluate('performance.now()') - t0))
-            if len(times) >= 2: break
-            await page.click('#next'); continue
-        if st == 'build':
-            for g in await page.evaluate("graphemes(SESSION.steps[SESSION.idx].id.slice(2))"):
-                await page.click(f"#stage .row .tile:not(.used):text-is('{g}')", timeout=5000)
-            await page.wait_for_selector('#next.show', timeout=30000); continue
-        oks = await page.query_selector_all('#stage .tile[data-ok="1"]:not([disabled])')
-        if oks: await oks[0].click(); continue
-    gum = await page.evaluate('window.__gum'); await ctx.close()
-    assert gum and all(gum), ('getUserMedia not called inside the tap gesture', gum)
+    await page.evaluate("""(()=>{const s=__anya.state; s.settings.speakFirst=true; s.level=16; s.settings.speakN=5; for(const l of LETTERS.slice(0,15)){ s.intro['L:'+l.id]=Date.now(); s.items['L:'+l.id]={a:3,c:3,h:[1,1,1],last:Date.now(),box:1,due:Date.now()+9e9}; } save();})()""")
+    await page.click('#startBtn'); times = []; want = 1 if broken else 2
+    for n in range(want):
+        await page.wait_for_function("SESSION && SESSION.steps[SESSION.idx].speak", timeout=120000)
+        idx = await page.evaluate('SESSION.idx'); t0 = await page.evaluate('performance.now()')
+        await page.wait_for_selector('#stage .saycue.on', timeout=30000)
+        await page.wait_for_function(f"!SESSION || SESSION.idx > {idx}", timeout=30000)  # auto-advance, no taps
+        times.append(round((await page.evaluate('performance.now()') - t0) / 1000, 1))
+        if n < want - 1:  # move on to the next speaking item, answering anything else
+            for _ in range(600):
+                if await page.evaluate("!SESSION || SESSION.steps[SESSION.idx].speak"): break
+                if await page.evaluate("document.querySelector('#next').classList.contains('show')"): await page.click('#next'); continue
+                st = await page.evaluate("SESSION.steps[SESSION.idx].shown")
+                if st == 'build':
+                    for g in await page.evaluate("graphemes(SESSION.steps[SESSION.idx].id.slice(2))"): await page.click(f"#stage .row .tile:not(.used):text-is('{g}')", timeout=5000)
+                    continue
+                oks = await page.query_selector_all('#stage .tile[data-ok="1"]:not([disabled])')
+                if oks: await oks[0].click()
+                await page.wait_for_timeout(100)
+    gum = await page.evaluate('window.__gum'); spoken = await page.evaluate("Object.values(__anya.state.spoken).reduce((a,x)=>a+x.a,0)"); await ctx.close()
     label = "audio 'ended' never fires" if broken else 'normal audio'
-    assert times and max(times) < 1500, (label, times)
-    print(f'SPEAK 👍 -> next arrow ({label}): {times} ms; getUserMedia in gesture: {gum}', 'page errors:', errs or 'none')
+    assert gum == 0 and not errs and spoken >= want and max(times) < (30 if broken else 20), (label, times, gum, errs)
+    print(f'SPEAK (no mic, {label}): {want} speaking item(s) finished and auto-advanced in {times} s; getUserMedia calls {gum}; spoken counted {spoken}; page errors none')
 async def speak_tests():
     stage()
     srv = await asyncio.create_subprocess_exec('python3', '-m', 'http.server', str(PORT), '--bind', '127.0.0.1', cwd=str(SERVE), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
     await asyncio.sleep(1)
     async with async_playwright() as p:
-        b = await p.chromium.launch(executable_path='/usr/bin/google-chrome', args=['--autoplay-policy=no-user-gesture-required', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'])
+        b = await p.chromium.launch(executable_path='/usr/bin/google-chrome', args=['--autoplay-policy=no-user-gesture-required'])
         await speak_advance(b, BASE, False); await speak_advance(b, BASE, True); await b.close()
     srv.terminate()
 if __name__ == '__main__':
